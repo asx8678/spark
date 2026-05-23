@@ -1,0 +1,17 @@
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# Elixir build artifacts
+/_build/
+/deps/
+*.ez
+
+# Test artifacts
+/cover/
+
+# Spark home (don't commit secrets)
+.spark/
+erl_crash.dump

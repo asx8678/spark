@@ -1,0 +1,34 @@
+defmodule Spark.MixProject do
+  use Mix.Project
+
+  def project do
+    [
+      app: :spark,
+      version: "4.0.0",
+      elixir: "~> 1.16",
+      start_permanent: Mix.env() == :prod,
+      deps: deps(),
+      elixirc_paths: elixirc_paths(Mix.env())
+    ]
+  end
+
+  def application do
+    [
+      extra_applications: [:logger, :crypto],
+      mod: {Spark.Application, []}
+    ]
+  end
+
+  defp deps do
+    [
+      {:req, "~> 0.5"},
+      {:jason, "~> 1.4"},
+      {:floki, "~> 0.36"},
+      {:phoenix_pubsub, "~> 2.1"},
+      {:term_ui, "~> 1.0-rc"}
+    ]
+  end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+end
