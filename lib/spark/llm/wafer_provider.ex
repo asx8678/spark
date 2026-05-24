@@ -242,6 +242,12 @@ defmodule Spark.LLM.WaferProvider do
                     delta_content =
                       get_in(data, ["choices", Access.at(0), "delta", "content"]) || ""
 
+                    # Provider-exposed reasoning fields — display as transcript but don't pollute content
+                    reasoning_text =
+                      get_in(data, ["choices", Access.at(0), "delta", "reasoning_content"]) ||
+                      get_in(data, ["choices", Access.at(0), "delta", "reasoning"]) ||
+                      get_in(data, ["choices", Access.at(0), "delta", "thinking"]) || ""
+
                     chunk_id = Map.get(data, "id")
                     chunk_model = Map.get(data, "model")
                     chunk_usage = get_in(data, ["usage"])
@@ -268,6 +274,11 @@ defmodule Spark.LLM.WaferProvider do
 
                     if delta_content != "" do
                       callback.({:chunk, %{delta: %{content: delta_content}}})
+                    end
+
+                    # Send reasoning as a separate visible chunk (tagged so TUI can label it)
+                    if reasoning_text != "" do
+                      callback.({:chunk, %{delta: %{content: reasoning_text}, type: :reasoning}})
                     end
 
                     inner_acc

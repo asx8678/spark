@@ -568,6 +568,102 @@ defmodule Spark.OrchestratorTest do
     end
   end
 
+  # --- Streaming planning flow ---
+
+  describe "run_streaming/2 — streaming planning flow" do
+    test "sends stream chunks to TUI pid before final plan result" do
+      # Set up a fake TUI pid that collects stream messages
+      tui_pid = self()
+
+      # Build valid JSON plan that spans multiple chunks
+      plan_json =
+        Jason.encode!(%{
+          "user_goal" => "Build a streaming test app",
+          "summary" => "A plan with 2 tasks",
+          "tasks" => [
+            %{"id" => "task_1", "title" => "Task 1", "description" => "Do thing 1", "risk" => "low"},
+            %{"id" => "task_2", "title" => "Task 2", "description" => "Do thing 2", "risk" => "medium"}
+          ]
+        })
+
+      full_content = "Here is your plan:\n```json\n#{plan_json}\n```"
+
+      # Split the content into chunks to simulate streaming
+      chunk_size = max(div(byte_size(full_content), 3), 1)
+      chunks =
+        full_content
+        |> String.graphemes()
+        |> Enum.chunk_every(chunk_size)
+        |> Enum.map(fn graphemes ->
+          {:chunk, %{delta: %{content: Enum.join(graphemes)}}}
+        end)
+
+      # Start orchestrator and set mocks
+      orch_pid = start_orchestrator_with_mocks([])
+
+      # Set stream chunks for the orchestrator's pid (via mock_caller_pid)
+      MockProvider.set_stream_chunks(orch_pid, chunks)
+
+      # Set the final complete response for the orchestrator's pid
+      MockProvider.set_responses(orch_pid, [
+        {:ok,
+         %{
+           id: "chatcmpl-stream-test",
+           model: "mock",
+           choices: [
+             %{message: %{role: "assistant", content: full_content}}
+           ],
+           usage: %{prompt_tokens: 10, completion_tokens: 50, total_tokens: 60}
+         }}
+      ])
+
+      # Call run_streaming — this is a synchronous call that returns the plan
+      # but chunks should have been sent to tui_pid during execution
+      assert {:ok, plan} = Orchestrator.run_streaming("Build a streaming test app", tui_pid)
+
+      # Verify we received stream_started
+      assert_received {:stream_started, %{}}
+
+      # Verify we received stream chunks
+      assert_received {:stream_chunk, _first_chunk}
+
+      # Verify we received stream_done
+      assert_received {:stream_done, %{}}
+
+      # Verify the final plan is valid
+      assert %Plan{} = plan
+      assert plan.approval_status == :awaiting_approval
+      assert length(plan.tasks) == 2
+
+      # Verify orchestrator ended in awaiting_approval
+      state = Orchestrator.get_state()
+      assert state.phase == :awaiting_approval
+      assert state.active_plan.id == plan.id
+
+      # Clean up mock data
+      MockProvider.clear(orch_pid)
+    end
+
+    test "sends stream_error on LLM failure" do
+      tui_pid = self()
+
+      # Start orchestrator with no mocks set — the stream will use default chunks
+      # but we'll set an error response
+      orch_pid = start_orchestrator_with_mocks([{:error, :api_timeout}])
+
+      MockProvider.set_stream_chunks(orch_pid, [])
+
+      assert {:error, {:llm_error, :api_timeout}} =
+               Orchestrator.run_streaming("Build something", tui_pid)
+
+      # Verify we received stream_started
+      assert_received {:stream_started, %{}}
+
+      # Clean up
+      MockProvider.clear(orch_pid)
+    end
+  end
+
   # --- Helpers ---
 
   defp wait_for_phase(expected_phase, timeout) do

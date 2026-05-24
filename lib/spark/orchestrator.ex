@@ -21,70 +21,15 @@ defmodule Spark.Orchestrator do
   alias Spark.EventBus
   alias Spark.Orchestrator.Checkpoint
   alias Spark.AgentProtocol
+  alias Spark.CodePuppyCompat
 
   @llm_call_timeout_ms 300_000
   @quick_call_timeout_ms 30_000
 
-  @orchestrator_prompt """
-  You are Spark's Planning Agent (Orchestrator), emulating the "Code Puppy" deep-investigation planning methodology.
-  Your job is to investigate, analyze, and architect a comprehensive implementation plan for the user's request.
-
-  ## CORE PHILOSOPHY & METHODOLOGY:
-
-  1. READ-ONLY INVESTIGATION (THE SNIFFING PHASE):
-     - You are strictly a planning and investigation agent. You are FORBIDDEN from writing, editing, or deleting files. You do not write code.
-     - You only analyze directories, read files, search the codebase, and run read-only shell commands.
-     - Look around the repository like a loyal sniffing dog. Find all active configuration files, existing patterns, and architecture.
-
-  2. DEEP CONTEXT GATHERING:
-     - Do not jump to conclusions or assume how things are done.
-     - Trace function calls, inspect modules, and read relevant files before proposing any architectural changes.
-     - Identify all upstream and downstream dependencies.
-
-  3. THE "HUGE PLAN" GENERATION:
-     - Once investigation is complete, you must generate a massive, exhaustive, step-by-step plan.
-     - The plan must be formatted beautifully in Markdown and placed in the "summary" field of the JSON payload.
-     - The plan must contain:
-       - **Analysis & Findings**: Brief summary of the project architecture and technology stack.
-       - **Technical Roadmap**: Detailed phase-by-phase steps.
-       - **Impact Area**: Specific file paths and functions to be modified or created.
-       - **Edge Cases & Risks**: Potential problems, error handling, and mitigation strategies.
-       - **Dependencies**: Any new libraries or files required.
-       - **Testing & Verification**: Specific commands (e.g. mix test, npm test) and criteria to verify success.
-       - **The Approval Gate**: You must end the plan summary with the exact phrase:
-         "Does this plan look good to you? Reply 'approve' to send this to the Coding Agent, or give me feedback to refine it."
-
-  4. THE APPROVAL GATE & HANDOFF:
-     - You must stop and wait for explicit user approval before the coding agent executes.
-     - Format the plan into a structured JSON payload containing "user_goal", "summary", and "tasks".
-     - The "tasks" list defines the structured items that will be passed to the Spark Dispatcher and executed by Coding Agent workers.
-
-  ## JSON OUTPUT SCHEMA FORMAT:
-
-  You MUST return a valid JSON object. You can wrap the JSON in a ````json ... ```` markdown fence.
-
-  JSON Structure:
-  {
-    "user_goal": "String describing the goal",
-    "summary": "Massive Markdown string containing the Huge Plan as described above",
-    "tasks": [
-      {
-        "id": "task_1",
-        "title": "Concise task title",
-        "description": "Exhaustive description of what to do",
-        "risk": "low | medium | high",
-        "read_paths": ["list", "of", "file", "paths"],
-        "write_paths": ["list", "of", "file", "paths"],
-        "depends_on": []
-      }
-    ]
-  }
-
-  JSON SCHEMA RULES:
-  - "tasks" must be a non-empty array.
-  - Dependencies must only refer to earlier task IDs (e.g. task_1).
-  - Use stable task IDs like "task_1", "task_2".
-  """
+  # Fallback prompt delegates to CodePuppyCompat for DRY consistency.
+  # build_cached_prefix/1 calls Prompt.Store.get(:orchestrator) first,
+  # falling back to this only if the Store is unavailable.
+  @orchestrator_prompt Spark.CodePuppyCompat.orchestrator_prompt()
 
   # --- Public API ---
 
@@ -180,10 +125,15 @@ defmodule Spark.Orchestrator do
   # spark-anh.2: Planning flow — async Task + GenServer.reply/2
   @impl true
   def handle_call({:run, user_input}, from, %State{phase: :awaiting_input} = state) do
+    prev_phase = state.phase
     state = %{state | phase: :planning}
     history_entry = %{role: "user", content: user_input}
     state = %{state | history: state.history ++ [history_entry], pending_reply: from}
     update_orch_metadata(state)
+
+    CodePuppyCompat.publish_state_transition(prev_phase, :planning, %{session_id: state.session_id}, "user submitted goal")
+    CodePuppyCompat.publish_reasoning(:thinking, "Beginning analysis of user goal: #{String.slice(user_input, 0, 80)}", %{session_id: state.session_id, source: :orchestrator})
+
     messages = build_messages(state, user_input)
 
     Logger.info("Orchestrator: calling LLM for goal: #{String.slice(user_input, 0, 80)}")
@@ -191,7 +141,10 @@ defmodule Spark.Orchestrator do
     parent = self()
     session_id = state.session_id
 
-    Elixir.Task.start(fn ->
+    llm_timeout = Spark.Config.get([:orchestrator, :llm_timeout_ms], 120_000)
+    timer_ref = Process.send_after(self(), {:llm_timeout, :run, from}, llm_timeout)
+
+    Elixir.Task.Supervisor.async_nolink(Spark.ToolSupervisor, fn ->
       result =
         Client.complete(:orchestrator, messages, %{
           session_id: session_id,
@@ -201,6 +154,7 @@ defmodule Spark.Orchestrator do
       send(parent, {:llm_response, :run, from, result, user_input})
     end)
 
+    state = %{state | pending_llm_timer: timer_ref}
     {:noreply, state}
   end
 
@@ -214,13 +168,22 @@ defmodule Spark.Orchestrator do
         from,
         %State{phase: :awaiting_input} = state
       ) do
+    prev_phase = state.phase
     state = %{state | phase: :planning}
     history_entry = %{role: "user", content: user_input}
     state = %{state | history: state.history ++ [history_entry], pending_reply: from}
     update_orch_metadata(state)
+
+    CodePuppyCompat.publish_state_transition(prev_phase, :planning, %{session_id: state.session_id}, "user submitted goal (streaming)")
+    CodePuppyCompat.publish_reasoning(:thinking, "Beginning streaming analysis of user goal: #{String.slice(user_input, 0, 80)}", %{session_id: state.session_id, source: :orchestrator})
+
     messages = build_messages(state, user_input)
 
     Logger.info("Orchestrator: streaming LLM for goal: #{String.slice(user_input, 0, 80)}")
+
+    # Send stream_started immediately so TUI shows the planning canvas
+    # before the first token arrives
+    send(tui_pid, {:stream_started, %{goal: String.slice(user_input, 0, 80)}})
 
     parent = self()
     session_id = state.session_id
@@ -230,18 +193,27 @@ defmodule Spark.Orchestrator do
         Logger.debug("Orchestrator stream: sending #{byte_size(text)} bytes to TUI")
         send(tui_pid, {:stream_chunk, text})
 
+      {:chunk, %{delta: %{content: text}, type: :reasoning}} when is_binary(text) and text != "" ->
+        Logger.debug("Orchestrator stream: sending #{byte_size(text)} reasoning bytes to TUI")
+        send(tui_pid, {:stream_chunk, %{type: :reasoning, text: text}})
+
       {:done, {:ok, response}} ->
         Logger.info("Orchestrator stream: done OK, forwarding to parent")
+        send(tui_pid, {:stream_done, %{}})
         send(parent, {:llm_response, :run, from, {:ok, response}, user_input})
 
       {:done, {:error, reason}} ->
         Logger.warning("Orchestrator stream: done ERROR #{inspect(reason)}")
+        send(tui_pid, {:stream_error, reason})
         send(parent, {:llm_response, :run, from, {:error, reason}, user_input})
 
       other ->
         Logger.debug("Orchestrator stream: unexpected callback event #{inspect(other)}")
         :ok
     end
+
+    llm_timeout = Spark.Config.get([:orchestrator, :llm_timeout_ms], 120_000)
+    timer_ref = Process.send_after(self(), {:llm_timeout, :run, from}, llm_timeout)
 
     Elixir.Task.start(fn ->
       Logger.info("Orchestrator stream: starting Client.stream for goal")
@@ -260,7 +232,8 @@ defmodule Spark.Orchestrator do
         case result do
           {:error, reason} ->
             Logger.error("Orchestrator stream: Client.stream error: #{inspect(reason)}")
-            # Callback {:done, _} never fired, so we must notify the orchestrator
+            # Callback {:done, _} never fired, so we must notify both TUI and orchestrator
+            send(tui_pid, {:stream_error, reason})
             send(parent, {:llm_response, :run, from, {:error, reason}, user_input})
 
           _ ->
@@ -271,6 +244,11 @@ defmodule Spark.Orchestrator do
           Logger.error("Orchestrator stream: Client.stream crashed: #{Exception.message(e)}")
 
           send(
+            tui_pid,
+            {:stream_error, {:stream_crash, Exception.message(e)}}
+          )
+
+          send(
             parent,
             {:llm_response, :run, from, {:error, {:stream_crash, Exception.message(e)}},
              user_input}
@@ -278,12 +256,14 @@ defmodule Spark.Orchestrator do
       catch
         :exit, reason ->
           Logger.error("Orchestrator stream: Client.stream exit: #{inspect(reason)}")
+          send(tui_pid, {:stream_error, {:stream_exit, reason}})
           send(parent, {:llm_response, :run, from, {:error, {:stream_exit, reason}}, user_input})
       end
 
       :ok
     end)
 
+    state = %{state | pending_llm_timer: timer_ref}
     {:noreply, state}
   end
 
@@ -301,6 +281,16 @@ defmodule Spark.Orchestrator do
             state = %{state | phase: :executing, active_plan: approved}
             update_orch_metadata(state)
             maybe_checkpoint(state)
+
+            CodePuppyCompat.publish_state_transition(:awaiting_approval, :executing, %{session_id: state.session_id, plan_id: plan_id}, "plan approved")
+            CodePuppyCompat.publish_reasoning(:handoff, CodePuppyCompat.handoff_phrase(), %{session_id: state.session_id, plan_id: plan_id, source: :orchestrator})
+
+            # Publish explicit coding_handoff event for TUI
+            EventBus.publish_event(:coding_handoff, %{message: CodePuppyCompat.handoff_phrase(), plan_id: plan_id},
+              session_id: state.session_id,
+              plan_id: plan_id,
+              source: :orchestrator
+            )
 
             # Agent Protocol: wrap each task into a TaskRequest envelope
             # (formal contract — existing enqueue call still works, P2.8 migrates)
@@ -354,6 +344,9 @@ defmodule Spark.Orchestrator do
         {:ok, rejected} = Plan.reject(plan)
         state = %{state | phase: :awaiting_input, active_plan: nil}
         update_orch_metadata(state)
+
+        CodePuppyCompat.publish_state_transition(:awaiting_approval, :awaiting_input, %{session_id: state.session_id, plan_id: plan_id}, "plan rejected: #{reason}")
+
         EventBus.publish_plan(plan_id, :plan_rejected, %{plan_id: plan_id, reason: reason})
         {:reply, {:ok, rejected}, state}
 
@@ -389,6 +382,9 @@ defmodule Spark.Orchestrator do
         }
 
         update_orch_metadata(state)
+
+        CodePuppyCompat.publish_state_transition(:awaiting_approval, :planning, %{session_id: state.session_id, plan_id: plan_id}, "plan modification requested: #{String.slice(instruction, 0, 80)}")
+
         messages = build_messages(state, "Modify the plan: #{instruction}")
 
         parent = self()
@@ -441,6 +437,8 @@ defmodule Spark.Orchestrator do
   # spark-anh.2/3: LLM response handlers — receive Task results and reply via GenServer.reply/2
   @impl true
   def handle_info({:llm_response, :run, from, result, user_input}, state) do
+    state = cancel_llm_timer(state)
+
     case process_run_result(result, user_input, state) do
       {:retry, new_state} ->
         # Store from in metadata for the retry handler
@@ -454,6 +452,7 @@ defmodule Spark.Orchestrator do
   end
 
   def handle_info({:llm_response, :run_retry, result, user_input}, state) do
+    state = cancel_llm_timer(state)
     from = Map.get(state.metadata, :pending_from)
     {reply, new_state} = process_run_result(result, user_input, state)
 
@@ -465,6 +464,21 @@ defmodule Spark.Orchestrator do
 
     if from, do: GenServer.reply(from, reply)
     {:noreply, new_state}
+  end
+
+  # LLM timeout handler — reply to the pending caller with an error
+  def handle_info({:llm_timeout, :run, from}, state) do
+    Logger.error(
+      "Orchestrator: LLM call timed out after #{Spark.Config.get([:orchestrator, :llm_timeout_ms], 120_000)}ms"
+    )
+
+    state = %{state | phase: :awaiting_input, active_plan: nil, pending_reply: nil}
+    update_orch_metadata(state)
+
+    CodePuppyCompat.publish_state_transition(:planning, :awaiting_input, %{session_id: state.session_id}, "LLM call timed out")
+
+    GenServer.reply(from, {:error, :llm_timeout})
+    {:noreply, state}
   end
 
   def handle_info({:llm_response, :modify_plan, from, result, modified}, state) do
@@ -512,6 +526,8 @@ defmodule Spark.Orchestrator do
         update_orch_metadata(state)
         maybe_checkpoint(state)
 
+        CodePuppyCompat.publish_state_transition(:reviewing, :completed, %{session_id: session_id, plan_id: plan_id}, "review completed successfully")
+
         EventBus.publish_plan(plan_id, :orchestrator_review_completed, %{
           plan_id: plan_id,
           session_id: session_id,
@@ -525,6 +541,8 @@ defmodule Spark.Orchestrator do
         state = %{state | phase: :completed}
         update_orch_metadata(state)
         maybe_checkpoint(state)
+
+        CodePuppyCompat.publish_state_transition(:reviewing, :completed, %{session_id: session_id, plan_id: plan_id}, "review failed")
 
         EventBus.publish_plan(plan_id, :orchestrator_review_completed, %{
           plan_id: plan_id,
@@ -640,6 +658,9 @@ defmodule Spark.Orchestrator do
             update_orch_metadata(state)
             maybe_checkpoint(state)
 
+            CodePuppyCompat.publish_state_transition(:planning, :awaiting_approval, %{session_id: state.session_id, plan_id: plan.id}, "plan parsed successfully: #{String.slice(plan.summary, 0, 80)}")
+            CodePuppyCompat.publish_reasoning(:planning, "Plan generated: #{String.slice(plan.summary, 0, 100)}", %{session_id: state.session_id, plan_id: plan.id, source: :orchestrator})
+
             EventBus.publish_plan(plan.id, :plan_awaiting_approval, %{
               plan_id: plan.id,
               summary: plan.summary
@@ -684,6 +705,7 @@ defmodule Spark.Orchestrator do
             else
               state = %{state | phase: :awaiting_input}
               update_orch_metadata(state)
+              CodePuppyCompat.publish_state_transition(:planning, :awaiting_input, %{session_id: state.session_id}, "plan validation failed")
               {{:error, {:plan_validation, errors}}, state}
             end
         end
@@ -691,6 +713,7 @@ defmodule Spark.Orchestrator do
       {:error, reason} ->
         state = %{state | phase: :awaiting_input}
         update_orch_metadata(state)
+        CodePuppyCompat.publish_state_transition(:planning, :awaiting_input, %{session_id: state.session_id}, "plan parse failed")
         {{:error, {:plan_parse, reason}}, state}
     end
   end
@@ -699,6 +722,7 @@ defmodule Spark.Orchestrator do
     Logger.error("Orchestrator: LLM call failed: #{inspect(reason)}")
     state = %{state | phase: :awaiting_input}
     update_orch_metadata(state)
+    CodePuppyCompat.publish_state_transition(:planning, :awaiting_input, %{session_id: state.session_id}, "LLM call failed")
     {{:error, {:llm_error, reason}}, state}
   end
 
@@ -711,6 +735,8 @@ defmodule Spark.Orchestrator do
             state = %{state | phase: :awaiting_approval, active_plan: new_plan}
             update_orch_metadata(state)
             maybe_checkpoint(state)
+
+            CodePuppyCompat.publish_state_transition(:planning, :awaiting_approval, %{session_id: state.session_id, plan_id: new_plan.id}, "plan modified successfully")
 
             EventBus.publish_plan(new_plan.id, :plan_awaiting_approval, %{
               plan_id: new_plan.id,
@@ -943,6 +969,7 @@ defmodule Spark.Orchestrator do
       state = %{state | phase: :reviewing}
       update_orch_metadata(state)
       maybe_checkpoint(state)
+      CodePuppyCompat.publish_state_transition(:executing, :reviewing, %{session_id: state.session_id, plan_id: state.active_plan.id}, "all tasks completed")
       send(self(), :do_final_review)
       state
     else
@@ -1003,6 +1030,15 @@ defmodule Spark.Orchestrator do
       actor: :orchestrator
     )
   end
+
+  defp cancel_llm_timer(%{pending_llm_timer: nil} = state), do: state
+
+  defp cancel_llm_timer(%{pending_llm_timer: ref} = state) when is_reference(ref) do
+    Process.cancel_timer(ref)
+    %{state | pending_llm_timer: nil}
+  end
+
+  defp cancel_llm_timer(state), do: %{state | pending_llm_timer: nil}
 
   defp restore_checkpoint(%State{session_id: session_id} = state) do
     case Checkpoint.restore(session_id) do

@@ -113,6 +113,61 @@ defmodule Spark.LLM.MockProviderTest do
       assert_receive {:mock_stream, {:chunk, %{delta: %{content: "stream"}}}}
       assert_receive {:mock_stream, {:done, _}}
     end
+
+    test "honors mock_caller_pid for queued stream chunks" do
+      caller_pid = self()
+
+      MockProvider.set_stream_chunks(caller_pid, [
+        {:chunk, %{delta: %{content: "from_caller "}}},
+        {:chunk, %{delta: %{content: "chunk"}}}
+      ])
+
+      # Spawn a task that runs stream with mock_caller_pid pointing to caller_pid
+      _task_pid =
+        spawn(fn ->
+          callback = fn event ->
+            send(caller_pid, {:mock_stream_remote, event})
+          end
+
+          MockProvider.stream([], %{mock_caller_pid: caller_pid}, callback)
+          send(caller_pid, :task_done)
+        end)
+
+      assert_receive {:mock_stream_remote, {:chunk, %{delta: %{content: "from_caller "}}}}, 1000
+      assert_receive {:mock_stream_remote, {:chunk, %{delta: %{content: "chunk"}}}}, 1000
+      assert_receive {:mock_stream_remote, {:done, _}}, 1000
+      assert_receive :task_done, 1000
+
+      MockProvider.clear(caller_pid)
+    end
+
+    test "honors mock_caller_pid for final complete response" do
+      caller_pid = self()
+
+      MockProvider.set_stream_chunks(caller_pid, [
+        {:chunk, %{delta: %{content: "data"}}}
+      ])
+
+      MockProvider.set_responses(caller_pid, [
+        {:ok, %{id: "final-from-caller", model: "test", choices: [], usage: %{}}}
+      ])
+
+      _task_pid =
+        spawn(fn ->
+          callback = fn event ->
+            send(caller_pid, {:mock_stream_final, event})
+          end
+
+          MockProvider.stream([], %{mock_caller_pid: caller_pid}, callback)
+          send(caller_pid, :task_done)
+        end)
+
+      assert_receive {:mock_stream_final, {:chunk, %{delta: %{content: "data"}}}}, 1000
+      assert_receive {:mock_stream_final, {:done, {:ok, %{id: "final-from-caller"}}}}, 1000
+      assert_receive :task_done, 1000
+
+      MockProvider.clear(caller_pid)
+    end
   end
 
   describe "queue_length/1" do

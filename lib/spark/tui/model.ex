@@ -14,7 +14,7 @@ defmodule Spark.TUI.Model do
   Overlays: some view_modes imply a command_mode (plan_review → approve).
   """
 
-  @type view_mode :: :welcome | :plan_review | :execution | :logs | :help | :tasks | :shell_output
+  @type view_mode :: :welcome | :plan_review | :planning_session | :execution | :logs | :help | :tasks | :shell_output
   @type command_mode :: :chat | :approve | :agent_picker
 
   @type t :: %__MODULE__{
@@ -47,6 +47,8 @@ defmodule Spark.TUI.Model do
           command_hint: String.t(),
           spinner_frame: non_neg_integer(),
           streaming_content: String.t(),
+          streaming_active?: boolean(),
+          planning_transcript: String.t(),
           task_statuses: [map()]
         }
 
@@ -83,6 +85,8 @@ defmodule Spark.TUI.Model do
     command_hint: "",
     spinner_frame: 0,
     streaming_content: "",
+    streaming_active?: false,
+    planning_transcript: "",
     task_statuses: []
   ]
 end

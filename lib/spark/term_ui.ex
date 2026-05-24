@@ -112,12 +112,7 @@ defmodule Spark.TermUI do
 
   def handle_info({:plan_result, result}, state) do
     Logger.debug("[SPARK] plan_result received")
-
-    model =
-      state.model
-      |> Map.put(:streaming_content, "")
-      |> then(&Spark.TUI.Update.update(&1, {:plan_result, result}))
-
+    model = Spark.TUI.Update.update(state.model, {:plan_result, result})
     {%{state | model: model}, []}
   end
 
@@ -150,8 +145,26 @@ defmodule Spark.TermUI do
   end
 
   def handle_info({:stream_chunk, text}, state) do
-    Logger.debug("[SPARK] stream_chunk: #{byte_size(text)} bytes")
+    Logger.debug("[SPARK] stream_chunk: #{chunk_debug_size(text)} bytes")
     model = Spark.TUI.Update.update(state.model, {:stream_chunk, text})
+    {%{state | model: model}, []}
+  end
+
+  def handle_info({:stream_started, metadata}, state) do
+    Logger.debug("[SPARK] stream_started: #{inspect(metadata)}")
+    model = Spark.TUI.Update.update(state.model, {:stream_started, metadata})
+    {%{state | model: model}, []}
+  end
+
+  def handle_info({:stream_done, metadata}, state) do
+    Logger.debug("[SPARK] stream_done: #{inspect(metadata)}")
+    model = Spark.TUI.Update.update(state.model, {:stream_done, metadata})
+    {%{state | model: model}, []}
+  end
+
+  def handle_info({:stream_error, reason}, state) do
+    Logger.warning("[SPARK] stream_error: #{inspect(reason)}")
+    model = Spark.TUI.Update.update(state.model, {:stream_error, reason})
     {%{state | model: model}, []}
   end
 
@@ -314,20 +327,25 @@ defmodule Spark.TermUI do
   # ── Canvas Content ──
 
   defp render_canvas_content(model) do
-    # During streaming planning, show the live output in the canvas
-    if model.loading? && model.streaming_content != nil && model.streaming_content != "" do
-      streaming_lines(model)
-    else
-      case model.view_mode || :welcome do
-        :welcome -> welcome_lines(model)
-        :plan_review -> plan_review_lines(model)
-        :execution -> execution_lines(model)
-        :logs -> logs_lines(model)
-        :help -> help_lines(model)
-        :tasks -> tasks_lines(model)
-        :shell_output -> shell_output_lines(model)
-        _ -> welcome_lines(model)
-      end
+    # Planning session takes priority — combined view for both streaming and plan
+    cond do
+      model.view_mode == :planning_session ->
+        planning_session_lines(model)
+
+      model.streaming_active? ->
+        streaming_lines(model)
+
+      true ->
+        case model.view_mode || :welcome do
+          :welcome -> welcome_lines(model)
+          :plan_review -> plan_review_lines(model)
+          :execution -> execution_lines(model)
+          :logs -> logs_lines(model)
+          :help -> help_lines(model)
+          :tasks -> tasks_lines(model)
+          :shell_output -> shell_output_lines(model)
+          _ -> welcome_lines(model)
+        end
     end
   end
 
@@ -346,9 +364,164 @@ defmodule Spark.TermUI do
 
   defp streaming_lines(model) do
     content = model.streaming_content || ""
-    lines = content |> String.split("\n") |> Enum.map(fn line -> "  #{line}" end)
-    status = if model.status_message, do: ["", "  #{model.status_message}...", ""], else: [""]
-    ["" | status] ++ [""] ++ lines
+
+    if content == "" do
+      # Pre-token placeholder: immediate feedback before first chunk
+      spinner_frame = model.spinner_frame || 0
+      spinner_chars = ~w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇]
+      spinner = Enum.at(spinner_chars, rem(spinner_frame, length(spinner_chars)), "⠋")
+
+      [
+        "",
+        "  #{spinner}  📡 Connecting to planning model...",
+        "  Waiting for first token...",
+        ""
+      ]
+    else
+      lines = content |> String.split("\n") |> Enum.map(fn line -> "  #{line}" end)
+      status = if model.status_message, do: ["", "  #{model.status_message}...", ""], else: [""]
+      ["" | status] ++ [""] ++ lines
+    end
+  end
+
+  # ── Combined Planning Session Lines ──
+
+  defp planning_session_lines(model) do
+    # Determine status label
+    status_label =
+      cond do
+        model.streaming_active? -> "📡 Streaming..."
+        model.active_plan != nil -> "✅ Plan ready"
+        model.error_message != nil and model.error_message != "" -> "❌ Error"
+        model.loading? -> "⏳ Loading..."
+        true -> "—"
+      end
+
+    # Header
+    header = [
+      "",
+      "  📋 Planning Session",
+      "  Status: #{status_label}",
+      ""
+    ]
+
+    # Transcript section — use planning_transcript (persistent), fallback to streaming_content (live)
+    transcript =
+      case {model.planning_transcript || "", model.streaming_content || ""} do
+        {t, _sc} when t != "" -> t
+        {"", sc} when sc != "" -> sc
+        _ -> ""
+      end
+
+    transcript_lines =
+      if transcript == "" and model.streaming_active? do
+        # Show connecting/waiting placeholder
+        spinner_frame = model.spinner_frame || 0
+        spinner_chars = ~w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇]
+        spinner = Enum.at(spinner_chars, rem(spinner_frame, length(spinner_chars)), "⠋")
+
+        [
+          "  ─── Model Output / Visible Reasoning ───",
+          "",
+          "  #{spinner}  📡 Connecting to planning model...",
+          "  Waiting for first token...",
+          ""
+        ]
+      else
+        if transcript == "" do
+          [
+            "  ─── Model Output / Visible Reasoning ───",
+            "",
+            "  (no transcript)",
+            ""
+          ]
+        else
+          t_lines = transcript |> String.split("\n") |> Enum.map(fn line -> "  #{line}" end)
+          ["  ─── Model Output / Visible Reasoning ───", "" | t_lines] ++ [""]
+        end
+      end
+
+    # Plan section
+    plan_lines =
+      if model.active_plan do
+        planning_session_plan_lines(model)
+      else
+        if model.streaming_active? do
+          ["  ─── Structured Plan ───", "", "  Structured plan will appear below when parsing completes...", ""]
+        else
+          []
+        end
+      end
+
+    # Error section (if any)
+    error_lines = error_prefix(model)
+
+    error_lines ++ header ++ transcript_lines ++ plan_lines
+  end
+
+  # Renders the structured plan portion of the planning session
+  defp planning_session_plan_lines(model) do
+    plan = model.active_plan
+
+    status_str =
+      case plan.approval_status do
+        :approved -> "[APPROVED]"
+        :awaiting_approval -> "[AWAITING APPROVAL]"
+        :rejected -> "[REJECTED]"
+        s -> "[#{String.upcase(to_string(s))}]"
+      end
+
+    task_lines =
+      if plan.tasks do
+        sel = model.selected_task_index || 0
+
+        Enum.with_index(plan.tasks)
+        |> Enum.flat_map(fn {task, idx} ->
+          marker = if idx == sel, do: "▸", else: " "
+
+          risk_sym =
+            case task.risk do
+              :low -> "🟢"
+              :medium -> "🟡"
+              :high -> "🔴"
+              _ -> "⚪"
+            end
+
+          [
+            "  #{marker} #{task.id}: #{task.title}",
+            "     #{risk_sym} Risk: #{task.risk} | Deps: #{join_or_none(task.depends_on)} | R/W: #{join_or_none(task.read_paths)}/#{join_or_none(task.write_paths)}"
+          ]
+        end)
+      else
+        ["  No tasks defined."]
+      end
+
+    plan_header =
+      [
+        "  ─── Structured Plan ───",
+        "",
+        "  PLAN: #{plan.id}",
+        "  Goal: #{plan.user_goal}",
+        "  Status: #{status_str}",
+        "  Summary: #{plan.summary || "--"}",
+        "",
+        "  ─── Tasks ───"
+      ]
+
+    detail =
+      if sel_task = Enum.at(plan.tasks || [], model.selected_task_index || 0) do
+        [
+          "",
+          "  ─── Detail: #{sel_task.id} ───",
+          "  #{sel_task.title}",
+          "  #{sel_task.description || "--"}",
+          "  Timeout: #{sel_task.timeout_ms}ms  Retries: #{sel_task.max_retries}"
+        ]
+      else
+        []
+      end
+
+    plan_header ++ task_lines ++ detail
   end
 
   # ── Welcome Lines ──
@@ -523,7 +696,12 @@ defmodule Spark.TermUI do
             else: "--:--:--"
 
         type = entry.type |> to_string() |> String.slice(0, 20)
-        "  #{time}  #{type}"
+
+        # Show payload message for Code Puppy compat events
+        payload = entry.payload || %{}
+        msg = if m = payload[:message], do: " #{String.slice(m, 0, 40)}", else: ""
+
+        "  #{time}  #{type}#{msg}"
       end)
 
     error_prefix = error_prefix(model)
@@ -571,10 +749,23 @@ defmodule Spark.TermUI do
             true -> ""
           end
 
-        "  #{time}  #{type} #{source}#{id}"
+        # Show payload message/reason when available (Code Puppy compat events)
+        payload_msg = extract_payload_message(entry)
+
+        "  #{time}  #{type} #{source}#{id}#{payload_msg}"
       end)
 
     ["" | log_entries]
+  end
+
+  defp extract_payload_message(entry) do
+    payload = entry.payload || %{}
+
+    cond do
+      msg = payload[:message] -> " #{String.slice(msg, 0, 60)}"
+      reason = payload[:reason] -> " reason=#{String.slice(inspect(reason), 0, 40)}"
+      true -> ""
+    end
   end
 
   # ── Chat Deck ──
@@ -773,4 +964,8 @@ defmodule Spark.TermUI do
   end
 
   defp gen_id, do: "tui_" <> Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+
+  defp chunk_debug_size(text) when is_binary(text), do: byte_size(text)
+  defp chunk_debug_size(%{text: text}) when is_binary(text), do: byte_size(text)
+  defp chunk_debug_size(_), do: 0
 end

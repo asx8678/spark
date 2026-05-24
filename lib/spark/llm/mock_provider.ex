@@ -107,8 +107,8 @@ defmodule Spark.LLM.MockProvider do
 
   @impl true
   @spec stream([map()], map(), function()) :: {:ok, map()} | {:error, term()}
-  def stream(_messages, _opts, callback) do
-    caller = self()
+  def stream(_messages, opts, callback) do
+    caller = Map.get(opts, :mock_caller_pid, self())
     ensure_table()
 
     chunks =
@@ -122,8 +122,9 @@ defmodule Spark.LLM.MockProvider do
       callback.(chunk)
     end
 
-    # Final complete response
-    final = complete([], %{})
+    # Final complete response — use the same caller so the orchestrator's
+    # queued responses are consumed correctly
+    final = complete([], %{mock_caller_pid: caller})
     callback.({:done, final})
     final
   end

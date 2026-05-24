@@ -23,28 +23,47 @@ defmodule Spark.TUI.Update do
   # ── 2. Async result handlers (view_mode transitions) ──
 
   defp handle(model, {:plan_result, {:ok, plan}}) do
+    # Preserve planning_transcript; copy streaming_content into transcript if transcript is empty
+    transcript =
+      case {model.planning_transcript || "", model.streaming_content || ""} do
+        {t, _sc} when t != "" -> t
+        {"", sc} when sc != "" -> sc
+        _ -> model.planning_transcript || ""
+      end
+
     %{
       model
       | loading?: false,
         active_plan: plan,
-        view_mode: :plan_review,
+        view_mode: :planning_session,
         command_mode: :approve,
         selected_task_index: 0,
-        scroll_offset: 0,
-        scroll_top: 0,
-        status_message: "Plan ready",
+        status_message: "Plan ready — review below",
         error_message: nil,
-        streaming_content: ""
+        streaming_content: "",
+        streaming_active?: false,
+        planning_transcript: transcript
     }
   end
 
   defp handle(model, {:plan_result, {:error, reason}}) do
+    # Preserve planning_transcript for debugging
+    transcript =
+      case {model.planning_transcript || "", model.streaming_content || ""} do
+        {t, _sc} when t != "" -> t
+        {"", sc} when sc != "" -> sc
+        _ -> model.planning_transcript || ""
+      end
+
     %{
       model
       | loading?: false,
+        view_mode: :planning_session,
         error_message: "Planning failed: #{format_reason(reason)}",
         status_message: nil,
-        streaming_content: ""
+        streaming_content: "",
+        streaming_active?: false,
+        planning_transcript: transcript
     }
   end
 
@@ -56,7 +75,7 @@ defmodule Spark.TUI.Update do
       | view_mode: :execution,
         command_mode: :chat,
         scroll_top: 0,
-        status_message: "Plan approved. Execution starting...",
+        status_message: "Handing off to Coding Agent...",
         error_message: nil
     }
   end
@@ -191,7 +210,11 @@ defmodule Spark.TUI.Update do
               status_message: "Planning...",
               error_message: nil,
               input_buffer: "",
-              streaming_content: ""
+              streaming_content: "",
+              streaming_active?: true,
+              planning_transcript: "",
+              view_mode: :planning_session,
+              scroll_top: 0
           }
 
           {model, cmd}
@@ -208,11 +231,13 @@ defmodule Spark.TUI.Update do
         input_buffer: "",
         status_message: "Plan cancelled",
         error_message: nil,
-        streaming_content: ""
+        streaming_content: "",
+        streaming_active?: false,
+        planning_transcript: ""
     }
 
-  # Ignore other keys while loading in chat
-  defp handle(%{command_mode: :chat, loading?: true} = model, _msg), do: model
+  # Ignore keyboard events while loading in chat (stream/tick/scroll still pass through)
+  defp handle(%{command_mode: :chat, loading?: true} = model, {:event, _msg}), do: model
 
   # ── APPROVE mode handlers ──
 
@@ -375,13 +400,41 @@ defmodule Spark.TUI.Update do
 
   defp handle(model, :tick) do
     dashboard = Spark.TUI.Actions.dashboard_snapshot()
+    phase = Map.get(dashboard, :orchestrator_phase)
+    active = Map.get(dashboard, :active_count, 0)
+    completed = Map.get(dashboard, :completed_count, 0)
+    failed = Map.get(dashboard, :failed_count, 0)
+    queued = Map.get(dashboard, :queue_length, 0)
+
+    total = active + completed + failed + queued
+    done = completed + failed
+    progress_pct = if total > 0, do: Float.floor(done / total * 100) |> trunc(), else: 0
+
+    status =
+      cond do
+        phase == :executing and active > 0 ->
+          "⚡ Executing: #{active} worker(s) running — #{done}/#{total} tasks done (#{progress_pct}%)"
+
+        phase == :executing and active == 0 and done > 0 ->
+          "✅ Execution complete: #{completed} succeeded, #{failed} failed"
+
+        phase == :reviewing ->
+          "🔍 Reviewing results..."
+
+        phase == :completed ->
+          "✅ Plan completed: #{completed} succeeded, #{failed} failed"
+
+        true ->
+          model.status_message
+      end
 
     %{
       model
       | dashboard: dashboard,
         task_statuses: Map.get(dashboard, :task_statuses, []),
         logs: Spark.TUI.Actions.load_logs(),
-        spinner_frame: ((model.spinner_frame || 0) + 1) |> rem(8)
+        spinner_frame: ((model.spinner_frame || 0) + 1) |> rem(8),
+        status_message: status
     }
   end
 
@@ -397,17 +450,43 @@ defmodule Spark.TUI.Update do
     %{model | scroll_top: new_scroll}
   end
 
-  # ── Stream chunk handler ──
+  # ── Stream lifecycle handlers ──
+
+  defp handle(model, {:stream_started, _metadata}) do
+    %{model | streaming_active?: true}
+  end
 
   defp handle(model, {:stream_chunk, text}) do
+    chunk = extract_chunk_text(text)
     current_len = byte_size(model.streaming_content || "")
-    new_model = %{model | streaming_content: (model.streaming_content || "") <> text}
+    new_model = %{
+      model
+      | streaming_content: (model.streaming_content || "") <> chunk,
+        planning_transcript: (model.planning_transcript || "") <> chunk
+    }
 
     Logger.debug(
       "[SPARK] TUI streaming: #{current_len} -> #{byte_size(new_model.streaming_content)} bytes"
     )
 
     new_model
+  end
+
+  defp handle(model, {:stream_done, _metadata}) do
+    # Stream finished; plan_result will handle final state transition.
+    # We keep streaming_active? true so the content stays visible until plan_result.
+    model
+  end
+
+  defp handle(model, {:stream_error, reason}) do
+    %{
+      model
+      | streaming_active?: false,
+        loading?: false,
+        error_message: "Stream error: #{format_reason(reason)}",
+        streaming_content: ""
+      # Preserve planning_transcript for debugging
+    }
   end
 
   # ── Catch-all ──
@@ -423,6 +502,15 @@ defmodule Spark.TUI.Update do
     do: String.slice(str, 0, max(String.length(str) - 1, 0))
 
   defp trim_last(_), do: ""
+
+  # Extract text from stream chunks — supports both plain binary and typed/map chunks
+  defp extract_chunk_text(text) when is_binary(text), do: text
+
+  defp extract_chunk_text(%{type: :reasoning, text: text}) when is_binary(text), do: text
+
+  defp extract_chunk_text(%{text: text}) when is_binary(text), do: text
+
+  defp extract_chunk_text(other), do: to_string(other)
 
   defp do_approve(%{active_plan: nil} = model) do
     %{model | error_message: "No active plan to approve", status_message: nil}
@@ -472,14 +560,14 @@ defmodule Spark.TUI.Update do
   defp handle_slash_command("/plan", %{active_plan: nil} = model),
     do: %{model | error_message: "No active plan", input_buffer: ""}
 
-  defp handle_slash_command("/plan", model),
-    do: %{
-      model
-      | view_mode: :plan_review,
-        command_mode: :approve,
-        input_buffer: "",
-        scroll_top: 0
-    }
+  defp handle_slash_command("/plan", model) do
+    # Use planning_session when transcript or plan exists for combined view
+    if (model.planning_transcript && model.planning_transcript != "") || model.active_plan do
+      %{model | view_mode: :planning_session, command_mode: :approve, input_buffer: ""}
+    else
+      %{model | view_mode: :plan_review, command_mode: :approve, input_buffer: "", scroll_top: 0}
+    end
+  end
 
   defp handle_slash_command("/exec", model),
     do: %{model | view_mode: :execution, input_buffer: "", command_mode: :chat, scroll_top: 0}
