@@ -163,7 +163,7 @@ defmodule Spark.Worker do
     })
 
     messages = build_messages(state)
-    opts = build_llm_opts(state)
+    opts = build_llm_opts(state, include_tools: iteration > 0)
 
     # Start the LLM call in a separate supervised Task
     llm_fn = state.llm_call_fn
@@ -506,7 +506,9 @@ defmodule Spark.Worker do
 
   # --- Private: Helpers ---
 
-  defp build_llm_opts(state) do
+  defp build_llm_opts(state, opts \\ []) do
+    include_tools = Keyword.get(opts, :include_tools, true)
+
     base = %{
       session_id: state.session_id,
       plan_id: state.plan_id,
@@ -514,10 +516,13 @@ defmodule Spark.Worker do
       timeout_ms: state.task.timeout_ms
     }
 
-    # Include tool schemas and tool_choice when tools are registered
-    case safe_openai_schemas() do
-      [] -> base
-      schemas -> Map.merge(base, %{tools: schemas, tool_choice: "auto"})
+    if include_tools do
+      case safe_openai_schemas() do
+        [] -> base
+        schemas -> Map.merge(base, %{tools: schemas, tool_choice: "auto"})
+      end
+    else
+      base
     end
   end
 

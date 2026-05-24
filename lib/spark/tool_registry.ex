@@ -140,7 +140,14 @@ defmodule Spark.ToolRegistry do
       Spark.Tools.Bash,
       Spark.Tools.WebFetch,
       Spark.Tools.WebSearch,
-      Spark.Tools.CreateAndLoadTool
+      Spark.Tools.CreateAndLoadTool,
+      # Code Puppy-compatible aliases
+      Spark.Tools.CodePuppyAliases.ListFiles,
+      Spark.Tools.CodePuppyAliases.CreateFile,
+      Spark.Tools.CodePuppyAliases.ReplaceInFile,
+      Spark.Tools.CodePuppyAliases.DeleteSnippet,
+      Spark.Tools.CodePuppyAliases.DeleteFile,
+      Spark.Tools.CodePuppyAliases.AgentRunShellCommand
     ]
   end
 

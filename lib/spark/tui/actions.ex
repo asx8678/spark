@@ -28,7 +28,12 @@ defmodule Spark.TUI.Actions do
           :task_started,
           :task_completed,
           :task_failed,
-          :worker_started
+          :worker_started,
+          :agent_reasoning,
+          :state_transition,
+          :tool_preflight,
+          :tool_result_summary,
+          :coding_handoff
         ]
       end)
 

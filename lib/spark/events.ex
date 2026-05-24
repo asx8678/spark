@@ -37,6 +37,13 @@ defmodule Spark.Events do
   defmacro tool_completed, do: :tool_completed
   defmacro tool_failed, do: :tool_failed
 
+  # Code Puppy Compatibility
+  defmacro agent_reasoning, do: :agent_reasoning
+  defmacro state_transition, do: :state_transition
+  defmacro tool_preflight, do: :tool_preflight
+  defmacro tool_result_summary, do: :tool_result_summary
+  defmacro coding_handoff, do: :coding_handoff
+
   # Orchestrator
   defmacro orchestrator_review_started, do: :orchestrator_review_started
   defmacro orchestrator_review_completed, do: :orchestrator_review_completed
@@ -81,6 +88,11 @@ defmodule Spark.Events do
       tool_started(),
       tool_completed(),
       tool_failed(),
+      agent_reasoning(),
+      state_transition(),
+      tool_preflight(),
+      tool_result_summary(),
+      coding_handoff(),
       orchestrator_review_started(),
       orchestrator_review_completed(),
       memory_written(),

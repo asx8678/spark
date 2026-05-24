@@ -101,6 +101,27 @@ defmodule Spark.ToolRegistryTest do
     end
   end
 
+  describe "default_tool_modules/0" do
+    test "includes Code Puppy alias tools" do
+      modules = Spark.ToolRegistry.default_tool_modules()
+      assert Spark.Tools.CodePuppyAliases.ListFiles in modules
+      assert Spark.Tools.CodePuppyAliases.CreateFile in modules
+      assert Spark.Tools.CodePuppyAliases.ReplaceInFile in modules
+      assert Spark.Tools.CodePuppyAliases.DeleteSnippet in modules
+      assert Spark.Tools.CodePuppyAliases.DeleteFile in modules
+      assert Spark.Tools.CodePuppyAliases.AgentRunShellCommand in modules
+    end
+
+    test "still includes original tools for backward compatibility" do
+      modules = Spark.ToolRegistry.default_tool_modules()
+      assert Spark.Tools.ReadFile in modules
+      assert Spark.Tools.WriteFile in modules
+      assert Spark.Tools.EditFile in modules
+      assert Spark.Tools.ListDir in modules
+      assert Spark.Tools.Bash in modules
+    end
+  end
+
   describe "version/1" do
     test "returns version starting at 1" do
       Spark.ToolRegistry.register(Spark.ToolRegistryTest.StubTool)

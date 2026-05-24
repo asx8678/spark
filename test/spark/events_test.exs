@@ -59,6 +59,15 @@ defmodule Spark.EventsTest do
       assert orchestrator_review_completed() == :orchestrator_review_completed
     end
 
+    test "Code Puppy compatibility events expand to correct atoms" do
+      import Spark.Events
+      assert agent_reasoning() == :agent_reasoning
+      assert state_transition() == :state_transition
+      assert tool_preflight() == :tool_preflight
+      assert tool_result_summary() == :tool_result_summary
+      assert coding_handoff() == :coding_handoff
+    end
+
     test "memory events expand to correct atoms" do
       import Spark.Events
       assert memory_written() == :memory_written
@@ -87,7 +96,12 @@ defmodule Spark.EventsTest do
       assert :memory_written in all
       assert :policy_reloaded in all
       assert :code_reloaded in all
-      assert length(all) == 32
+      assert :agent_reasoning in all
+      assert :state_transition in all
+      assert :tool_preflight in all
+      assert :tool_result_summary in all
+      assert :coding_handoff in all
+      assert length(all) == 37
     end
   end
 

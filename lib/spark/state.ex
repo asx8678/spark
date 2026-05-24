@@ -31,6 +31,7 @@ defmodule Spark.State do
           memory_refs: [String.t()],
           schema_version: pos_integer(),
           pending_reply: {pid(), reference()} | nil,
+          pending_llm_timer: reference() | nil,
           metadata: map()
         }
 
@@ -49,6 +50,7 @@ defmodule Spark.State do
     :memory_refs,
     :schema_version,
     :pending_reply,
+    :pending_llm_timer,
     :metadata
   ]
 
@@ -64,6 +66,7 @@ defmodule Spark.State do
     memory_refs: [],
     schema_version: 1,
     pending_reply: nil,
+    pending_llm_timer: nil,
     metadata: %{}
   ]
 

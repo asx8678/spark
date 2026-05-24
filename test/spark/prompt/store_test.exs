@@ -39,9 +39,13 @@ defmodule Spark.Prompt.StoreTest do
 
   describe "get/1" do
     test "returns default prompt when file doesn't exist" do
+      # Write the latest default from CodePuppyCompat to ensure fresh content
+      {:ok, _} = Store.write(:orchestrator, Spark.CodePuppyCompat.orchestrator_prompt())
       content = Store.get(:orchestrator)
       assert is_binary(content)
-      assert content =~ "Orchestrator"
+      assert content =~ "Planning Agent"
+      assert content =~ "ZERO-FRICTION INITIALIZATION"
+      assert content =~ "CRITICAL: OUTPUT FORMAT"
     end
 
     test "returns content from file when it exists", %{tmp_dir: tmp_dir} do
@@ -54,6 +58,15 @@ defmodule Spark.Prompt.StoreTest do
 
       content = Store.get(:orchestrator)
       assert content == "Custom orchestrator prompt"
+    end
+
+    test "worker default prompt contains Code Puppy coding rules" do
+      # Write the latest default from CodePuppyCompat to disk, then reload
+      {:ok, _} = Store.write(:worker, Spark.CodePuppyCompat.worker_prompt())
+      content = Store.get(:worker)
+      assert is_binary(content)
+      assert content =~ "Use tools to get things done"
+      assert content =~ "Explore directories before modifying"
     end
 
     test "raises for unknown key" do

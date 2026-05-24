@@ -168,6 +168,33 @@ defmodule Spark.ToolRunnerTest do
 
       assert_receive {:event, %{type: :tool_failed}}
     end
+
+    test "publishes tool_preflight before execution" do
+      ToolRegistry.register(Spark.ToolRunnerTest.GoodTool)
+      EventBus.add_hook(:test_collector, fn event -> send(self(), {:event, event}) end)
+
+      ToolRunner.run("good_tool", %{path: "/tmp/test"}, @base_ctx)
+
+      assert_receive {:event, %{type: :tool_preflight, payload: %{tool: "good_tool"}}}
+    end
+
+    test "publishes tool_result_summary on success" do
+      ToolRegistry.register(Spark.ToolRunnerTest.GoodTool)
+      EventBus.add_hook(:test_collector, fn event -> send(self(), {:event, event}) end)
+
+      ToolRunner.run("good_tool", %{path: "/tmp/test"}, @base_ctx)
+
+      assert_receive {:event, %{type: :tool_result_summary, payload: %{tool: "good_tool", status: status}}}
+      assert status == "success"
+    end
+
+    test "publishes tool_result_summary on failure" do
+      EventBus.add_hook(:test_fail_collector, fn event -> send(self(), {:event, event}) end)
+
+      ToolRunner.run("nonexistent", %{}, @base_ctx)
+
+      assert_receive {:event, %{type: :tool_result_summary, payload: %{tool: "nonexistent"}}}
+    end
   end
 
   describe "run/3 — structured results" do

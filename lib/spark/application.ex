@@ -73,7 +73,17 @@ defmodule Spark.Application do
         # HTTP connection pool — starts in all envs so LLM calls work
         {Finch,
          name: Spark.FinchPool,
-         pools: %{"https://pass.wafer.ai" => [size: 20], default: [size: 10]}},
+         pools: %{
+           "https://pass.wafer.ai" => [
+             size: 20,
+             conn_opts: [timeout: 15_000]
+           ],
+           default: [
+             size: 10,
+             conn_opts: [timeout: 15_000]
+           ]
+         },
+         pool_timeout: 10_000},
 
         # LLM resilience: circuit breaker + rate limiter (ETS table owners)
         {Spark.LLM.CircuitBreaker, []},

@@ -16,6 +16,7 @@ defmodule Spark.ToolRunner do
   alias Spark.ToolRegistry
   alias Spark.Policy
   alias Spark.EventBus
+  alias Spark.CodePuppyCompat
 
   @default_timeout_ms 30_000
   @max_output_bytes 20_000
@@ -44,11 +45,29 @@ defmodule Spark.ToolRunner do
          :ok <- validate_schema(entry.module, args),
          :ok <- validate_policy(tool_name, context),
          _ <- publish_started(tool_name, context) do
-      exec_supervised(entry.module, tool_name, args, context, timeout, max_output)
+      # Code Puppy-style preflight explanation
+      tool_desc =
+        try do
+          entry.module.description()
+        rescue
+          _ -> ""
+        end
+
+      CodePuppyCompat.publish_tool_preflight(tool_name, args, context, tool_desc)
+
+      result = exec_supervised(entry.module, tool_name, args, context, timeout, max_output)
+
+      # Code Puppy-style result summary
+      CodePuppyCompat.publish_tool_summary(tool_name, result, context)
+
+      result
     else
       {:error, reason} ->
         publish_failed(tool_name, reason, context)
-        {:error, format_error(reason)}
+        # Also publish Code Puppy-style summaries for failure paths
+        error_result = {:error, format_error(reason)}
+        CodePuppyCompat.publish_tool_summary(tool_name, error_result, context)
+        error_result
     end
   end
 

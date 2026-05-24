@@ -293,7 +293,7 @@ defmodule Spark.CLI do
   defp dispatch(%Command{type: :approve}, %{active_plan: plan} = state) do
     case safe_call(fn -> Spark.Orchestrator.approve_plan(plan.id) end) do
       {:ok, approved} ->
-        IO.puts(IO.ANSI.green() <> "✅ Plan approved! Execution starting..." <> IO.ANSI.reset())
+        IO.puts(IO.ANSI.green() <> "✅ Plan approved! Handing off to Coding Agent..." <> IO.ANSI.reset())
         streaming_loop(%{state | active_plan: approved, approval_mode: false})
 
       {:error, reason} ->
