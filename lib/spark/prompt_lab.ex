@@ -74,10 +74,19 @@ defmodule Spark.PromptLab do
       retry_count: candidate.retry_count - baseline.retry_count,
       token_estimate: candidate.token_estimate - baseline.token_estimate,
       policy_violations: candidate.policy_violations - baseline.policy_violations,
-      improved?: candidate.failure_count <= baseline.failure_count and
-                 candidate.policy_violations <= baseline.policy_violations,
-      baseline: Map.take(baseline, ~w(tool_call_count failure_count retry_count token_estimate policy_violations)a),
-      candidate: Map.take(candidate, ~w(tool_call_count failure_count retry_count token_estimate policy_violations)a)
+      improved?:
+        candidate.failure_count <= baseline.failure_count and
+          candidate.policy_violations <= baseline.policy_violations,
+      baseline:
+        Map.take(
+          baseline,
+          ~w(tool_call_count failure_count retry_count token_estimate policy_violations)a
+        ),
+      candidate:
+        Map.take(
+          candidate,
+          ~w(tool_call_count failure_count retry_count token_estimate policy_violations)a
+        )
     }
   end
 
@@ -100,7 +109,8 @@ defmodule Spark.PromptLab do
 
         {:ok, entries}
 
-      {:error, reason} -> {:error, {:log_read_error, reason}}
+      {:error, reason} ->
+        {:error, {:log_read_error, reason}}
     end
   end
 
@@ -142,22 +152,27 @@ defmodule Spark.PromptLab do
     end)
   end
 
-  defp count_tool_calls(acc, type) when type in ["tool_started", "tool_completed", "tool_failed"] do
+  defp count_tool_calls(acc, type)
+       when type in ["tool_started", "tool_completed", "tool_failed"] do
     %{acc | tool_call_count: acc.tool_call_count + 1}
   end
+
   defp count_tool_calls(acc, _type), do: acc
 
   defp count_failures(acc, "tool_failed") do
     %{acc | failure_count: acc.failure_count + 1}
   end
+
   defp count_failures(acc, "task_failed") do
     %{acc | failure_count: acc.failure_count + 1}
   end
+
   defp count_failures(acc, _type), do: acc
 
   defp count_retries(acc, "task_retried") do
     %{acc | retry_count: acc.retry_count + 1}
   end
+
   defp count_retries(acc, _type), do: acc
 
   defp add_tokens(acc, tokens) do
@@ -167,11 +182,14 @@ defmodule Spark.PromptLab do
   defp add_policy_violations(acc, violations) when is_integer(violations) do
     %{acc | policy_violations: acc.policy_violations + violations}
   end
+
   defp add_policy_violations(acc, _), do: acc
 
-  defp add_note_if_relevant(acc, type, _result) when type in ["tool_failed", "task_failed", "task_retried"] do
+  defp add_note_if_relevant(acc, type, _result)
+       when type in ["tool_failed", "task_failed", "task_retried"] do
     %{acc | notes: acc.notes ++ ["Event: #{type}"]}
   end
+
   defp add_note_if_relevant(acc, _type, _result), do: acc
 
   defp estimate_entry_tokens(entry) do

@@ -115,6 +115,7 @@ defmodule Spark.Tools.WriteFile do
     with :ok <- ensure_in_project_root?(full, root) do
       dir = Path.dirname(full)
       File.mkdir_p!(dir)
+
       case File.write(full, content) do
         :ok -> {:ok, %{path: path, bytes_written: byte_size(content), task_id: task_id}}
         {:error, reason} -> {:error, %{path: path, reason: reason}}
@@ -182,7 +183,7 @@ defmodule Spark.Tools.EditFile do
   @impl true
   def execute(%{path: path, search: search, replace: replace, task_id: task_id}, context)
       when is_binary(path) and is_binary(search) and is_binary(replace) and
-           is_binary(task_id) and task_id != "" do
+             is_binary(task_id) and task_id != "" do
     root = Map.get(context, :project_root, File.cwd!())
     full = Path.expand(path, root)
 
@@ -192,20 +193,31 @@ defmodule Spark.Tools.EditFile do
          {:ok, new_content} <- apply_replace(content, search, replace, count) do
       case File.write(full, new_content) do
         :ok ->
-          {:ok, %{
-            path: path,
-            replacements: count,
-            task_id: task_id
-          }}
+          {:ok,
+           %{
+             path: path,
+             replacements: count,
+             task_id: task_id
+           }}
+
         {:error, reason} ->
           {:error, %{path: path, reason: reason}}
       end
     else
-      {:error, {:path_escape, _}} -> {:error, %{path: path, reason: :path_escape}}
-      {:error, :enoent} -> {:error, %{path: path, reason: :file_not_found}}
-      {:error, {:not_found, search}} -> {:error, %{path: path, reason: :search_not_found, search: search}}
-      {:error, {:multiple_matches, n}} -> {:error, %{path: path, reason: :ambiguous_match, matches: n}}
-      {:error, reason} -> {:error, %{path: path, reason: reason}}
+      {:error, {:path_escape, _}} ->
+        {:error, %{path: path, reason: :path_escape}}
+
+      {:error, :enoent} ->
+        {:error, %{path: path, reason: :file_not_found}}
+
+      {:error, {:not_found, search}} ->
+        {:error, %{path: path, reason: :search_not_found, search: search}}
+
+      {:error, {:multiple_matches, n}} ->
+        {:error, %{path: path, reason: :ambiguous_match, matches: n}}
+
+      {:error, reason} ->
+        {:error, %{path: path, reason: reason}}
     end
   end
 
@@ -227,6 +239,7 @@ defmodule Spark.Tools.EditFile do
 
   defp count_occurrences(content, search) do
     count = count_matches(content, search)
+
     cond do
       count == 0 -> {:error, {:not_found, search}}
       count == 1 -> {:ok, 1}

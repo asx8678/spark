@@ -22,14 +22,19 @@ defmodule Spark.DispatcherTest do
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
       EventBus.clear_hooks()
+
       try do
         if pid = Process.whereis(Spark.Dispatcher), do: GenServer.stop(pid, :shutdown)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Spark.Config), do: Agent.stop(pid)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       File.rm_rf!(tmp_dir)
     end)
 
@@ -47,9 +52,14 @@ defmodule Spark.DispatcherTest do
 
   defp do_await_completed_count(count, deadline) do
     status = Dispatcher.status()
+
     cond do
-      status.completed_count >= count -> status
-      System.monotonic_time(:millisecond) >= deadline -> status
+      status.completed_count >= count ->
+        status
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        status
+
       true ->
         Process.sleep(20)
         do_await_completed_count(count, deadline)
@@ -246,6 +256,51 @@ defmodule Spark.DispatcherTest do
       Process.sleep(50)
       status = Dispatcher.status()
       assert status.queue_length > 0
+    end
+  end
+
+  # --- task_statuses ---
+
+  describe "task_statuses/0" do
+    test "returns empty list for fresh dispatcher" do
+      assert Dispatcher.task_statuses() == []
+    end
+
+    test "includes queued tasks when paused" do
+      Dispatcher.pause()
+      Dispatcher.enqueue("plan_1", [make_task("ts_q1", %{title: "Queued task"})])
+
+      statuses = Dispatcher.task_statuses()
+      assert length(statuses) >= 1
+      assert Enum.any?(statuses, &(&1.task_id == "ts_q1" and &1.status == :queued))
+    end
+
+    test "includes running and completed tasks after execution" do
+      EventBus.subscribe("spark:task:ts_run")
+      Dispatcher.enqueue("plan_1", [make_task("ts_run", %{title: "Running task"})])
+
+      assert_receive %Event{type: :task_completed, task_id: "ts_run"}, 2000
+
+      # Small delay to let dispatcher state catch up (cast-based update)
+      Process.sleep(50)
+      statuses = Dispatcher.task_statuses()
+      assert Enum.any?(statuses, &(&1.task_id == "ts_run" and &1.status == :completed))
+    after
+      EventBus.unsubscribe("spark:task:ts_run")
+    end
+
+    test "returns list of maps with required keys" do
+      Dispatcher.pause()
+      Dispatcher.enqueue("plan_1", [make_task("ts_keys")])
+
+      statuses = Dispatcher.task_statuses()
+
+      for entry <- statuses do
+        assert Map.has_key?(entry, :task_id)
+        assert Map.has_key?(entry, :title)
+        assert Map.has_key?(entry, :status)
+        assert entry.status in [:queued, :running, :completed, :failed]
+      end
     end
   end
 end

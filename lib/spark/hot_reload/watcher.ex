@@ -41,6 +41,7 @@ defmodule Spark.HotReload.Watcher do
   @doc """
   Starts the Watcher GenServer.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
@@ -49,6 +50,7 @@ defmodule Spark.HotReload.Watcher do
   @doc """
   Forces an immediate scan of all watched paths.
   """
+  @spec scan() :: {:ok, map()}
   def scan do
     GenServer.call(__MODULE__, :scan)
   end
@@ -56,6 +58,7 @@ defmodule Spark.HotReload.Watcher do
   @doc """
   Returns the current file index.
   """
+  @spec index() :: map()
   def index do
     GenServer.call(__MODULE__, :index)
   end
@@ -63,6 +66,7 @@ defmodule Spark.HotReload.Watcher do
   @doc """
   Enables the watcher (starts polling).
   """
+  @spec enable() :: :ok
   def enable do
     GenServer.call(__MODULE__, :enable)
   end
@@ -70,6 +74,7 @@ defmodule Spark.HotReload.Watcher do
   @doc """
   Disables the watcher (stops polling).
   """
+  @spec disable() :: :ok
   def disable do
     GenServer.call(__MODULE__, :disable)
   end
@@ -77,6 +82,7 @@ defmodule Spark.HotReload.Watcher do
   @doc """
   Returns whether the watcher is currently enabled.
   """
+  @spec enabled?() :: boolean()
   def enabled? do
     GenServer.call(__MODULE__, :enabled?)
   end
@@ -98,11 +104,12 @@ defmodule Spark.HotReload.Watcher do
     state = if state.enabled, do: schedule_poll(state), else: state
 
     # Build initial index on startup
-    state = if state.enabled do
-      %{state | file_index: build_index(state)}
-    else
-      state
-    end
+    state =
+      if state.enabled do
+        %{state | file_index: build_index(state)}
+      else
+        state
+      end
 
     {:ok, state}
   end
@@ -171,6 +178,7 @@ defmodule Spark.HotReload.Watcher do
   end
 
   defp cancel_poll(%{timer_ref: nil} = state), do: state
+
   defp cancel_poll(%{timer_ref: ref} = state) do
     Process.cancel_timer(ref)
     %{state | timer_ref: nil}
@@ -210,6 +218,7 @@ defmodule Spark.HotReload.Watcher do
 
   defp ignored_file?(path, patterns) do
     basename = Path.basename(path)
+
     Enum.any?(patterns, fn pattern ->
       String.ends_with?(basename, pattern)
     end)
@@ -219,6 +228,7 @@ defmodule Spark.HotReload.Watcher do
     case File.stat(path) do
       {:ok, stat} ->
         hash = compute_hash(path)
+
         %{
           mtime: stat.mtime,
           size: stat.size,
@@ -255,6 +265,7 @@ defmodule Spark.HotReload.Watcher do
       Enum.filter(old_paths -- removed, fn path ->
         old_stat = Map.get(old_index, path)
         new_stat = Map.get(new_index, path)
+
         old_stat != nil and new_stat != nil and
           (old_stat.hash != new_stat.hash or old_stat.mtime != new_stat.mtime)
       end)
@@ -262,8 +273,11 @@ defmodule Spark.HotReload.Watcher do
     %{added: added, modified: modified, removed: removed}
   end
 
-  defp apply_debounce(%{added: added, modified: modified, removed: removed} = _changes,
-                      debounce_map, _poll_interval) do
+  defp apply_debounce(
+         %{added: added, modified: modified, removed: removed} = _changes,
+         debounce_map,
+         _poll_interval
+       ) do
     now = System.monotonic_time(:millisecond)
 
     all_changed = added ++ modified ++ removed

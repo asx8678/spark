@@ -8,13 +8,38 @@ defmodule Spark.ModelCatalog do
 
   @providers %{
     "deepseek" => [
-      %{id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", provider: "deepseek", description: "Best quality, recommended for planning/orchestration"},
-      %{id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", provider: "deepseek", description: "Fast and efficient, good for coding tasks"},
-      %{id: "deepseek-chat", name: "DeepSeek Chat (Legacy)", provider: "deepseek", description: "Legacy model, deprecated 2026-07-24"}
+      %{
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        provider: "deepseek",
+        description: "Best quality, recommended for planning/orchestration"
+      },
+      %{
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        provider: "deepseek",
+        description: "Fast and efficient, good for coding tasks"
+      },
+      %{
+        id: "deepseek-chat",
+        name: "DeepSeek Chat (Legacy)",
+        provider: "deepseek",
+        description: "Legacy model, deprecated 2026-07-24"
+      }
     ],
     "wafer" => [
-      %{id: "glm-5.1", name: "GLM 5.1", provider: "wafer", description: "Wafer AI flagship, strong coding performance"},
-      %{id: "deepseek-chat", name: "DeepSeek Chat (via Wafer)", provider: "wafer", description: "DeepSeek Chat routed through Wafer AI"}
+      %{
+        id: "glm-5.1",
+        name: "GLM 5.1",
+        provider: "wafer",
+        description: "Wafer AI flagship, strong coding performance"
+      },
+      %{
+        id: "qwen3.5-397b-a17b",
+        name: "Qwen 3.5 397B A17B",
+        provider: "wafer",
+        description: "Qwen 3.5 397B MoE, 17B active params, via Wafer AI"
+      }
     ]
   }
 

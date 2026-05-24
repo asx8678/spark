@@ -2,7 +2,8 @@
 
 > **Auto-generated** from the Spark v4.0 Master Implementation Plan.
 > **Coordinator:** `planning-agent-754a5d`
-> **Total:** 17 epics · 101 tasks · 9 milestones · 123 bd issues
+> **v4.1 Coordinators:** planning-agent-754a5d (v4.0), planning-agent-3e8ed8 (v4.1 TUI + Planning Prompt)
+> **Total:** 19 epics · 120 tasks · 11 milestones · 145 bd issues
 > **Source:** `bd` database at `/Users/adam2/projects/spark/.beads/`
 
 ---
@@ -32,6 +33,8 @@ Connected via **EventBus** (Phoenix.PubSub), enforced by **Policy**, steered by 
 | **MVP-7**: Production Hardening | Multi-task session, failures, reloads, reliable review | Phase 10–15 |
 | **MVP-8**: Agent & Model Manager | `/agent` menu pins models to Planning/Coding agents, multi-provider routing | Phase 16 |
 | **MVP-9**: Architecture Hardening & Production Readiness | No blocked GenServer mailboxes under load, bounded memory growth, connection pooling active, graceful Ctrl+C shutdown | Phase 17 |
+| **MVP-10**: TUI Dashboard Redesign | Full-screen 85/15 split canvas+command deck, zero flicker, Unicode box-drawing, ASCII art banner, pixel-perfect resize, smooth scrolling | Phase 18 |
+| **MVP-11**: Code Puppy Planning Prompt | Planning Agent uses read-only tool restriction, generates huge exhaustive plans in structured Markdown, enforces approval gate, hands off via GenServer message passing | Phase 19 |
 
 ---
 
@@ -56,6 +59,8 @@ Connected via **EventBus** (Phoenix.PubSub), enforced by **Policy**, steered by 
 | `spark-opg` | 15 | End-to-End Execution Flow & Integration Tests | P2 | 5 |
 | `spark-a8m` | 16 | Agent & Model Manager with Interactive Model Pinning | P1 | 5 |
 | `spark-ard` | 17 | Architecture Hardening & Production Readiness | P0 | 19 |
+| `spark-dsh` | 18 | TUI Dashboard Redesign — Full-Screen Canvas + Command Deck | P1 | 10 |
+| `spark-pup` | 19 | Planning Agent System Prompt — "Code Puppy" Methodology | P1 | 4 |
 
 ---
 
@@ -73,8 +78,10 @@ Phase 3 (spark-bny) ──┘── Phase 5 (spark-u4b) ──┤── Phase 6 
                                                    └── Phase 7 (spark-anh) ──┬── Phase 12 (spark-3jf) ── Phase 13 (spark-l1b)
                                                                               ├── Phase 14 (spark-98t)
                                                                               ├── Phase 15 (spark-opg)
-                                                                              ├── Phase 16 (spark-a8m) ── depends on Phase 4 (LLM), Phase 14 (CLI)
-                                                                              └── Phase 17 (spark-ard) ── depends on all prior phases (full-system hardening)
+                                                                              ├── Phase 16 (spark-a8m)
+                                                                              ├── Phase 17 (spark-ard)
+                                                                              ├── Phase 18 (spark-dsh) ── depends on Phase 14 (CLI/TUI foundation), Phase 16 (AgentManager)
+                                                                              └── Phase 19 (spark-pup) ── depends on Phase 4 (LLM), Phase 7 (Orchestrator), Phase 14 (CLI)
 ```
 
 ---
@@ -291,6 +298,54 @@ Phase 3 (spark-bny) ──┘── Phase 5 (spark-u4b) ──┤── Phase 6 
 | spark-ard.18 | Formalize Planning Agent ↔ Coding Agent protocol as typed behaviour | New `Spark.AgentProtocol` behaviour: `@callback handle_task_request(TaskRequest.t()) :: {:ok, Task.t()} | {:error, term()}`, `@callback report_progress(Task.t(), Progress.t()) :: :ok`, `@callback report_completion(Task.t(), WorkerResult.t()) :: :ok`. New structs: `Spark.Types.TaskRequest` (id, plan_id, task_spec, context, timeout_ms) and `Spark.Types.Progress` (task_id, phase, detail, percent, timestamp). `Registry`-based agent discovery replaces `Process.whereis/1`. | Planning Agent sends `TaskRequest` via `Registry` lookup → Coding Agent receives, validates, enqueues. Progress reports (throttled to 1/sec) arrive at Planning Agent. Completion with `WorkerResult`. |
 | spark-ard.19 | Replace hardcoded `Process.whereis/1` with Registry-based agent discovery | All cross-agent calls use `Spark.AgentProtocol.find/1` which queries `Spark.SessionRegistry` via `Registry.lookup/2`. Agents register on init with `Registry.register/3` keyed by `{session_id, :orchestrator}` and `{session_id, :dispatcher}`. Workers find Dispatcher via `{:via, Registry, {Spark.SessionRegistry, {session_id, :dispatcher}}}`. | Kill and restart Orchestrator → new PID registered under same key → Workers find new Orchestrator without config change. Multiple sessions isolated by `session_id` prefix. |
 
+### Phase 18: TUI Dashboard Redesign — Full-Screen Canvas + Command Deck (`spark-dsh`, 10 tasks)
+
+> **Source:** Elite TUI/UX Redesign by `planning-agent-3e8ed8` — full-screen harmonious dashboard with zero-flicker rendering.
+> **Reference:** Python `fast_puppy/` Code Puppy planning agent methodology at `../fast_puppy/code_puppy/agents/agent_planning.py`.
+> **Design Principle:** 85% Canvas (chat/plan/logs) + 15% Command Deck (input/status). Unicode box-drawing borders. ASCII art avatars. Pixel-perfect character-cell rendering.
+
+#### Sub-Phase 18A: Layout Engine & Visual Foundation (3 tasks, P0)
+
+| Task ID | Title | Acceptance Criteria | Key Tests |
+|---------|-------|---------------------|----------|
+| spark-dsh.1 | Create `Spark.TUI.Layout` — 85/15 Canvas + Command Deck split | Module provides `render_dashboard/2` that takes terminal `{width, height}` and two content functions (canvas_fn, deck_fn). Returns styled `TermUI` component tree. Top 85% wrapped in `┌─┐│└─┘` Unicode box with 2-char horizontal padding and 1-line vertical padding. Bottom 15% similarly bordered. Middle border line uses `├─┤` connector. Resize recalculates on every render via `TermUI.Terminal.width/height()`. Content clips to zone — never bleeds across borders. | 80×24 terminal: canvas = 20 rows, deck = 4 rows. 120×40: canvas = 34 rows, deck = 6 rows. Resize from 80×24 to 120×40 → both zones grow proportionally. No flickering during resize. |
+| spark-dsh.2 | Create `Spark.TUI.Art` — ASCII banner, agent avatars, progress bars, spinners | `welcome_banner/0` returns multi-line styled ASCII art (Spark logo + puppy). `agent_avatar(:planning)` returns ASCII puppy face (8×5 char grid). `agent_avatar(:coding)` returns ASCII robot (8×5 char grid). `progress_bar(0..100, width)` returns `[████░░░░░░] 40%` with the bar scaled to width. `spinner(frame)` returns one of 8 spinner frames: `⠋⠙⠹⠸⠼⠴⠦⠧⠇`. `divider(:thick)` returns `━━━`, `divider(:thin)` returns `───`. All return `TermUI` styled components using `Spark.TermUI` style helpers. | Banner renders without line-wrap at 80 cols. Progress bar at 0% shows all `░`, at 100% shows all `█`. Spinner cycles through all 8 frames. Avatar fits within 8×5 grid. |
+| spark-dsh.3 | Refactor `Spark.TUI.Model` for unified dashboard state | Replace `screen: :home` field with `view_mode: :welcome | :plan_review | :execution | :logs`. Replace `previous_screen` with `canvas_content` atom. Add `scroll_offset: 0`, `canvas_lines: []` (pre-rendered lines for scrolling), `command_mode: :chat | :approve | :agent_picker`, `command_hint: ""`, `spinner_frame: 0`, `banner_visible: true`. NOTE: `:navigate` mode was replaced with slash-command handling in the `:chat` Enter handler; `:agent_picker` is triggered by `/agents`. Remove `selected_index`, `selected_agent`, `selected_model_index` (fold into command deck state). Keep existing fields: `session_id`, `agents`, `agent_order`, `dashboard`, `active_plan`, `status_message`, `error_message`, `logs`, `input_buffer`, `loading?`, `selected_task_index`. | Model struct compiles. All existing tests that create `%Spark.TUI.Model{}` still pass (backward compat via defaults). New fields accessible. |
+
+#### Sub-Phase 18B: Unified Canvas Rendering (2 tasks, P0)
+
+| Task ID | Title | Acceptance Criteria | Key Tests |
+|---------|-------|---------------------|----------|
+| spark-dsh.4 | Rewrite `Spark.TermUI.view/1` to render unified canvas dashboard | Replace `view_content/1` screen dispatcher with `render_canvas_content/1`. For `:welcome`: agent status cards, runtime phase, slash command reference. For `:plan_review`: plan details with task list, selected task detail panel, status badge. For `:execution`: live dashboard with progress bar, active workers, recent events. For `:logs`: color-coded event log entries. ALL modes rendered via `stack(:vertical, canvas_lines ++ [separator] ++ deck_lines)` using native term_ui RenderNode tree (no manual border drawing — that caused rendering artifacts). Command deck shows input line with slash command reference bar. | Welcome screen shows ASCII art at top, command deck at bottom with blinking cursor. Plan review shows Markdown-rendered plan in canvas. Execution dashboard shows progress bars updating. Toggle between modes with single keys without flicker. |
+| spark-dsh.5 | Rewrite `Spark.TUI.Update` for unified command-mode input handling | Remove screen-based pattern matching. Replace with `command_mode` dispatch: `:chat` → typing appends to `input_buffer`, Enter checks for slash command prefix (`/welcome /plan /exec /logs /dash /agents /help /quit /clear /approve /reject`); non-prefixed text submits as plan goal. `:approve` → A/R keys trigger approve/reject, ↑/↓ scrolls plan canvas. `:agent_picker` → triggered by `/agents` slash command. Esc always returns to `:chat`. q/Q ignored in chat mode to prevent accidental quit. | Typing "build a CLI tool" in chat mode → Enter → loading spinner appears → plan result renders in canvas. Up/down scrolls plan by 1 line. PgUp/PgDn scrolls by canvas height. `/agents` opens agent picker. `/plan` with active plan shows plan review. `/quit` quits. `/welcome` returns to welcome. `q` while typing is safe (ignored in chat mode). Typing a goal + Enter starts planning flow. |
+
+#### Sub-Phase 18C: Scrolling & Dynamic Behavior (1 task, P0)
+
+| Task ID | Title | Acceptance Criteria | Key Tests |
+|---------|-------|---------------------|----------|
+| spark-dsh.6 | Implement smooth scrolling and content overflow with scroll indicators | `render_canvas/1` pre-renders all plan/execution lines into `model.canvas_lines`. Calculates `visible_lines = canvas_height - 4` (accounting for padding). Only renders `Enum.slice(canvas_lines, scroll_offset, visible_lines)`. When `scroll_offset > 0`: show `  ▲ more above` indicator at top of canvas (dim style). When `scroll_offset + visible_lines < total_lines`: show `  ▼ more below` indicator at bottom. Auto-scroll to bottom on new content (`:execution` mode, `scroll_offset = max(0, total_lines - visible_lines)`). Mouse wheel events (if available via term_ui) adjust scroll. | Plan with 200 lines → canvas shows 20 lines at a time → scroll from line 0 to line 180 with smooth increments. Scroll indicators appear/disappear correctly at boundaries. New Worker event auto-scrolls to bottom. Manual scroll up pauses auto-scroll until user scrolls back to bottom. |
+
+#### Sub-Phase 18D: Integration & Polish (4 tasks, P1)
+
+| Task ID | Title | Acceptance Criteria | Key Tests |
+|---------|-------|---------------------|----------|
+| spark-dsh.7 | Wire planning agent handoff into orchestrator via GenServer message passing | When user presses `A` (approve) in `:approve` command_mode, `Spark.TUI.Actions.approve_plan/1` sends `GenServer.call(Orchestrator, {:approve_plan, plan_id})`. Orchestrator formats the approved plan as structured JSON (`%{objective: ..., phases: [...], risks: [...]}`) and sends it via `GenServer.cast(Dispatcher, {:enqueue_plan, plan_json})`. Dispatcher decomposes phases into individual Worker tasks. EventBus publishes `:plan_approved` and `:tasks_queued` events. TUI canvas switches to `:execution` mode automatically. | Approve plan → canvas switches to execution → progress bar appears → workers start. Event log shows task_queued events. Dispatcher receives structured plan JSON with correct task breakdown. |
+| spark-dsh.8 | Update `mix.exs` and verify `term_ui` capability coverage | Audit `term_ui ~> 1.0-rc` for all needed features (dynamic resize events, raw mode, styled text with fg/bg/bold/dim, component stacking with `stack(:vertical, ...)`, Unicode output). If any missing, build shim in `Spark.TUI.Layout` using raw ANSI escape sequences as fallback. Document any workarounds. | `mix deps.get` succeeds. `mix compile` succeeds. Terminal resize triggers `:resized` event. Unicode box-drawing characters render correctly in iTerm2, Kitty, Terminal.app. |
+| spark-dsh.9 | Write/update tests for new TUI modules | `test/spark/tui/layout_test.exs`: verify 85/15 split calculation, box-drawing border assembly, content clipping. `test/spark/tui/art_test.exs`: verify banner width, progress bar scaling, spinner cycle. `test/spark/tui/dashboard_test.exs`: update existing TUI tests for new model fields. `test/spark/tui/model_test.exs`: verify new struct defaults. All tests use `TermUI.Test` helpers if available, otherwise test pure rendering functions. | `mix test test/spark/tui/` — all pass. Coverage report shows >85% for new modules. No regression in existing tests. |
+| spark-dsh.10 | QA review — pixel-perfect rendering across terminal sizes | Manual QA: launch TUI at 80×24, 120×40, 200×60. Verify: box borders align perfectly (no misaligned corners), ASCII art banner is centered, progress bars scale correctly, scroll indicators appear at boundaries, input cursor blinks in command deck, resize recalculates layout without artifacts, colors render correctly (cyan bold headers, green success, red errors, yellow warnings), no flickering on any terminal. Take screenshots at each size. | Visual inspection checklist passed. No layout bugs. Borders perfectly aligned. |
+
+### Phase 19: Planning Agent System Prompt — "Code Puppy" Methodology (`spark-pup`, 4 tasks)
+
+> **Source:** Deep investigation of `fast_puppy/code_puppy/agents/agent_planning.py` (Python reference) by `planning-agent-3e8ed8`.
+> **Philosophy:** Read-only investigation → Huge exhaustive plan → Approval gate → Structured handoff. The Planning Agent NEVER writes code — it investigates, architects, and coordinates.
+
+| Task ID | Title | Acceptance Criteria | Key Tests |
+|---------|-------|---------------------|----------|
+| spark-pup.1 | Create `Spark.Prompt.PlanningAgent` — the exact System Prompt module | Module `Spark.Prompt.PlanningAgent.system_prompt/0` returns the complete prompt string (see Part 2B of the implementation plan). Prompt enforces: (1) Read-only tools only: `list_files`, `read_file`, `grep`, `ask_user_question`, `list_agents`, `invoke_agent`, `list_or_search_skills`. CRITICAL: strictly FORBIDDEN from writing/editing/deleting files. (2) Deep context gathering: read relevant files, trace function calls, understand architecture before proposing. (3) "Huge Plan" generation: exhaustive step-by-step plan with exact file paths, specific functions to modify, edge cases, dependencies, testing strategy. Formatted in structured Markdown with emoji headings (🎯 OBJECTIVE, 📊 PROJECT ANALYSIS, 📋 EXECUTION PLAN, ⚠️ RISKS, 🔄 ALTERNATIVES, 🚀 NEXT STEPS). (4) Approval Gate: MUST stop and ask "Does this plan look good to you? Reply 'approve' to send to Coding Agent." (5) Handoff: format approved plan as structured JSON, pass via GenServer message to Coding Agent. Prompt includes Spark-specific knowledge (OTP patterns, module naming, test conventions). Agent identity: `planning-agent-3e8ed8`. | Prompt string is non-empty, contains all 5 rule sections, contains Spark-specific module references, includes read-only tool list. Prompt length between 2000-4000 tokens. |
+| spark-pup.2 | Integrate prompt into `Spark.LLM.Client` and `Spark.Config` | Add config path `[:planning_agent, :system_prompt]` with default `Spark.Prompt.PlanningAgent.system_prompt/0`. `Spark.Config` supports `get([:planning_agent, :system_prompt])`. `Spark.LLM.Client` checks agent type when building messages: if agent is `:planning` (orchestrator actor), inject planning system prompt instead of default. Prompt supports hot reload via `:prompt_reloaded` event (re-read from config). User can override prompt via `~/.spark/prompts/planning_agent.md` with higher priority than default. | Orchestrator LLM call includes planning prompt. Config override respected. Hot reload changes prompt for next planning call. `mix test test/spark/llm/` passes. |
+| spark-pup.3 | Create Python vs. Elixir comparison documentation | `docs/planning_agent_comparison.md` documents: how Python `fast_puppy/code_puppy/agents/agent_planning.py` handles planning (BaseAgent subclass, `get_system_prompt()`, tool restriction via `get_available_tools()`, invoke_agent handoff) vs. how Spark handles it (prompt in `Spark.Prompt.PlanningAgent`, tool restriction via prompt + `Spark.ToolRegistry`, GenServer message passing handoff). Includes a table mapping Python concepts to Elixir equivalents. | Document is well-formatted Markdown, contains comparison table, references exact file paths in both codebases. |
+| spark-pup.4 | Test prompt rendering in TUI canvas + end-to-end planning flow | Integration test: `test/spark/integration/planning_prompt_e2e_test.exs`. Uses `Spark.LLM.MockProvider` with a pre-canned planning response in the structured Markdown format. Verifies: (1) Orchestrator receives planning prompt (assert prompt contains "Read-Only Investigation"), (2) Mock LLM returns plan with 🎯📊📋⚠️🔄🚀 headings, (3) Plan parsed by `Spark.PlanParser` extracts phases and tasks correctly, (4) TUI canvas renders plan Markdown with correct styling (headings in cyan bold, checkboxes styled, code fences dimmed). Also: `test/spark/prompt/planning_agent_prompt_test.exs` verifies prompt structure (all 5 sections present, no write tools mentioned). | E2E test: goal → planning prompt injected → mock returns structured plan → parsed into `Spark.Types.Plan` → rendered in TUI canvas with correct styling. Prompt test: all 5 rule sections present, read-only tools verified, Spark-specific references present. |
+
 ---
 
 ### Architecture Review Summary
@@ -344,6 +399,7 @@ Every reloadable component must define:
 6. **Every reloadable module includes hot reload acceptance criteria**
 7. **Static prefix must stay stable** — never append volatile data
 8. **Workers are disposable** — receive task + context, return structured result
+9. **Planning Agent is read-only** — `Spark.Prompt.PlanningAgent` enforces no-write policy via prompt. Planning agent investigates codebase, generates exhaustive plans in structured Markdown with 🎯📊📋⚠️🔄🚀 format, gates on user approval, and hands off structured JSON to Coding Agent via GenServer message passing.
 
 ---
 

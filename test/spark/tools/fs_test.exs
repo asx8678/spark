@@ -67,7 +67,9 @@ defmodule Spark.Tools.FSTest do
         File.write!(Path.join(root, "file_#{i}.txt"), String.duplicate("x", 100))
       end
 
-      assert {:ok, result} = ListDir.execute(%{path: "."}, %{project_root: root, max_output_bytes: 200})
+      assert {:ok, result} =
+               ListDir.execute(%{path: "."}, %{project_root: root, max_output_bytes: 200})
+
       assert result.truncated == true
       assert String.contains?(result.output, "truncated")
     end
@@ -131,7 +133,9 @@ defmodule Spark.Tools.FSTest do
     end
 
     test "rejects path escaping project root", %{project_root: root} do
-      assert {:error, reason} = Grep.execute(%{pattern: "test"}, %{project_root: root, search_path: "../../etc"})
+      assert {:error, reason} =
+               Grep.execute(%{pattern: "test"}, %{project_root: root, search_path: "../../etc"})
+
       assert reason.reason == :path_escape
     end
 
@@ -145,7 +149,12 @@ defmodule Spark.Tools.FSTest do
       content = Enum.map(1..500, fn i -> "pattern_match_line_#{i}" end) |> Enum.join("\n")
       File.write!(Path.join(root, "big_match.txt"), content)
 
-      assert {:ok, result} = Grep.execute(%{pattern: "pattern_match"}, %{project_root: root, max_output_bytes: 200})
+      assert {:ok, result} =
+               Grep.execute(%{pattern: "pattern_match"}, %{
+                 project_root: root,
+                 max_output_bytes: 200
+               })
+
       assert result.truncated == true
     end
   end

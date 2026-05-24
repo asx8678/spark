@@ -19,7 +19,8 @@ defmodule Spark.Tools.CreateAndLoadTool do
   def name, do: "create_and_load_tool"
 
   @impl true
-  def description, do: "Create and dynamically load a new tool at runtime. High-risk — requires approval."
+  def description,
+    do: "Create and dynamically load a new tool at runtime. High-risk — requires approval."
 
   @impl true
   def schema do
@@ -30,7 +31,10 @@ defmodule Spark.Tools.CreateAndLoadTool do
         name: %{type: "string", description: "Tool name (used as filename and registry key)"},
         source_code: %{type: "string", description: "Elixir source code implementing Spark.Tool"},
         task_id: %{type: "string", description: "Owning task identifier"},
-        overwrite: %{type: "boolean", description: "Allow overwriting an existing tool (default: false)"}
+        overwrite: %{
+          type: "boolean",
+          description: "Allow overwriting an existing tool (default: false)"
+        }
       }
     }
   end
@@ -49,17 +53,20 @@ defmodule Spark.Tools.CreateAndLoadTool do
          {:ok, module} <- compile_tool(name),
          :ok <- register_tool(module, overwrite) do
       # Emit :tool_reloaded event
-      EventBus.publish_hot_reload(:tool_reloaded, %{
-        tool_name: name,
-        module: module
-      }, source: :forge)
+      EventBus.publish_hot_reload(
+        :tool_reloaded,
+        %{
+          tool_name: name,
+          module: module
+        }, source: :forge)
 
-      {:ok, %{
-        name: name,
-        module: module,
-        status: :created,
-        task_id: task_id
-      }}
+      {:ok,
+       %{
+         name: name,
+         module: module,
+         status: :created,
+         task_id: task_id
+       }}
     else
       {:error, reason} ->
         {:error, Map.merge(%{name: name, task_id: task_id}, normalize_error(reason))}
@@ -103,6 +110,7 @@ defmodule Spark.Tools.CreateAndLoadTool do
       {:error, {:not_found, _}} ->
         # Check if file exists on disk too
         path = tool_path(name)
+
         if File.exists?(path) and not overwrite do
           {:error, {:file_already_exists, path}}
         else
@@ -135,7 +143,9 @@ defmodule Spark.Tools.CreateAndLoadTool do
     metadata = if overwrite, do: [replace: true], else: []
 
     case ToolRegistry.register(module, metadata) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, {:already_registered, name}} ->
         if overwrite do
           ToolRegistry.register(module, replace: true)

@@ -9,12 +9,13 @@ defmodule Spark.LLM.ProviderTest do
 
     @impl true
     def complete(_messages, _opts) do
-      {:ok, %{
-        id: "chatcmpl-test",
-        model: "test-model",
-        choices: [%{message: %{role: "assistant", content: "hello"}}],
-        usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-      }}
+      {:ok,
+       %{
+         id: "chatcmpl-test",
+         model: "test-model",
+         choices: [%{message: %{role: "assistant", content: "hello"}}],
+         usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+       }}
     end
 
     @impl true
@@ -33,12 +34,13 @@ defmodule Spark.LLM.ProviderTest do
 
     @impl true
     def complete(_messages, _opts) do
-      {:ok, %{
-        id: "chatcmpl-sync",
-        model: "sync-model",
-        choices: [%{message: %{role: "assistant", content: "sync only"}}],
-        usage: %{prompt_tokens: 5, completion_tokens: 3, total_tokens: 8}
-      }}
+      {:ok,
+       %{
+         id: "chatcmpl-sync",
+         model: "sync-model",
+         choices: [%{message: %{role: "assistant", content: "sync only"}}],
+         usage: %{prompt_tokens: 5, completion_tokens: 3, total_tokens: 8}
+       }}
     end
   end
 

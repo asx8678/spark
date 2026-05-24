@@ -1,5 +1,8 @@
 defmodule Spark.CLI do
   @moduledoc """
+  ⚠️ DEPRECATED: This module is deprecated in favor of Spark.TermUI.
+  It will be removed in v5.0.
+
   Interactive REPL for Spark — command parsing, approval UI,
   parallel dashboard, hot reload, and streaming event display.
 
@@ -22,34 +25,55 @@ defmodule Spark.CLI do
   end
 
   @slash_cmds %{
-    "/plan" => :plan, "/code" => :code, "/approve" => :approve,
-    "/reject" => :reject, "/modify" => :modify, "/status" => :status,
-    "/workers" => :workers, "/tasks" => :tasks, "/clear" => :clear,
-    "/prompt_lab" => :prompt_lab, "/refine_prompt" => :refine_prompt, "/exit" => :exit,
+    "/plan" => :plan,
+    "/code" => :code,
+    "/approve" => :approve,
+    "/reject" => :reject,
+    "/modify" => :modify,
+    "/status" => :status,
+    "/workers" => :workers,
+    "/tasks" => :tasks,
+    "/clear" => :clear,
+    "/prompt_lab" => :prompt_lab,
+    "/refine_prompt" => :refine_prompt,
+    "/exit" => :exit,
     "/agent" => :agent
   }
 
   @reload_targets %{
-    "prompts" => :reload_prompts, "tools" => :reload_tools,
-    "config" => :reload_config, "policy" => :reload_policy,
-    "guidance" => :reload_guidance, "status" => :reload_status
+    "prompts" => :reload_prompts,
+    "tools" => :reload_tools,
+    "config" => :reload_config,
+    "policy" => :reload_policy,
+    "guidance" => :reload_guidance,
+    "status" => :reload_status
   }
 
   @doc "Parses a REPL input line into a Command struct or {:error, reason}."
   @spec parse(String.t()) :: {:ok, Command.t()} | {:error, String.t()}
   def parse(""), do: {:ok, %Command{type: :empty}}
   def parse(nil), do: {:ok, %Command{type: :empty}}
+
   def parse(input) when is_binary(input) do
     input = String.trim(input)
+
     cond do
-      input == "" -> {:ok, %Command{type: :empty}}
+      input == "" ->
+        {:ok, %Command{type: :empty}}
+
       String.starts_with?(input, "!") ->
         {:ok, %Command{type: :shell, args: %{command: String.slice(input, 1..-1//1)}}}
-      String.starts_with?(input, "/") -> parse_slash(input)
+
+      String.starts_with?(input, "/") ->
+        parse_slash(input)
+
       true ->
         case suggest_slash_command(input) do
-          {:ok, suggestion} -> {:error, "Unknown command. Did you mean #{suggestion}? " <> help_text()}
-          :none -> {:ok, %Command{type: :plan, args: %{goal: input}}}
+          {:ok, suggestion} ->
+            {:error, "Unknown command. Did you mean #{suggestion}? " <> help_text()}
+
+          :none ->
+            {:ok, %Command{type: :plan, args: %{goal: input}}}
         end
     end
   end
@@ -58,36 +82,53 @@ defmodule Spark.CLI do
     parts = String.split(input, ~r/\s+/, parts: 2)
     cmd = hd(parts)
     arg = Enum.at(parts, 1, "")
+
     case Map.get(@slash_cmds, cmd) do
-      nil when cmd == "/reload" -> parse_reload(arg)
-      nil -> {:error, "Unknown command: #{cmd}. " <> help_text()}
+      nil when cmd == "/reload" ->
+        parse_reload(arg)
+
+      nil ->
+        {:error, "Unknown command: #{cmd}. " <> help_text()}
+
       type when type in [:plan, :code] ->
         {:ok, %Command{type: type, args: %{goal: arg}}}
+
       :modify ->
         {:ok, %Command{type: :modify, args: %{instruction: arg}}}
+
       :prompt_lab ->
         {:ok, %Command{type: :prompt_lab, args: %{log_file: arg}}}
-      type -> {:ok, %Command{type: type, args: %{}}}
+
+      type ->
+        {:ok, %Command{type: type, args: %{}}}
     end
   end
 
   defp parse_reload(""), do: {:ok, %Command{type: :reload_all, args: %{}}}
+
   defp parse_reload(arg) do
     case Map.get(@reload_targets, arg) do
-      nil -> {:error, "Unknown reload target: #{arg}. Use: prompts, tools, config, policy, guidance, status"}
-      type -> {:ok, %Command{type: type, args: %{}}}
+      nil ->
+        {:error,
+         "Unknown reload target: #{arg}. Use: prompts, tools, config, policy, guidance, status"}
+
+      type ->
+        {:ok, %Command{type: type, args: %{}}}
     end
   end
 
   defp suggest_slash_command(input) do
     first_word = input |> String.split(~r/\s+/, parts: 2) |> hd()
+
     case Map.get(@slash_cmds, "/" <> first_word) do
       nil -> :none
       _type -> {:ok, "/" <> first_word}
     end
   end
 
-  defp help_text, do: "Available: /plan, /code, /approve, /reject, /modify, /status, /workers, /tasks, /reload [prompts|tools|config|policy|guidance|status], /prompt_lab, /refine_prompt, /agent, /clear, /exit, !<shell cmd>"
+  defp help_text,
+    do:
+      "Available: /plan, /code, /approve, /reject, /modify, /status, /workers, /tasks, /reload [prompts|tools|config|policy|guidance|status], /prompt_lab, /refine_prompt, /agent, /clear, /exit, !<shell cmd>"
 
   # ── REPL state & start (spark-98t.2) ────────────────────────────────
 
@@ -97,34 +138,55 @@ defmodule Spark.CLI do
   @doc "Starts the REPL as a linked process."
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts \\ []) do
-    pid = spawn_link(fn ->
-      init_subscriptions()
-      state = %__MODULE__{session_id: Keyword.get(opts, :session_id, gen_id())}
-      banner()
-      repl_loop(state)
-    end)
+    pid =
+      spawn_link(fn ->
+        init_subscriptions()
+        state = %__MODULE__{session_id: Keyword.get(opts, :session_id, gen_id())}
+        banner()
+        repl_loop(state)
+      end)
+
     {:ok, pid}
   end
+
+  # keep existing
 
   defp init_subscriptions do
     try do
       EventBus.subscribe("spark:events")
       EventBus.subscribe("spark:hot_reload")
-    rescue _ -> :ok end
+    rescue
+      _ -> :ok
+    end
   end
 
   defp banner do
+    IO.puts(
+      IO.ANSI.yellow() <>
+        "⚠️  Spark.CLI is deprecated. Use Spark.TermUI instead." <> IO.ANSI.reset()
+    )
+
     IO.puts(IO.ANSI.cyan() <> "🔮 Spark v4.0 — Parallel Actor-Model Code Agent" <> IO.ANSI.reset())
-    IO.puts("Type your goal to start planning, /agent for model manager, /status for dashboard, /exit to quit.\n")
+
+    IO.puts(
+      "Type your goal to start planning, /agent for model manager, /status for dashboard, /exit to quit.\n"
+    )
   end
 
   defp repl_loop(%__MODULE__{} = state) do
     state = flush_events(state)
     prompt = if state.approval_mode, do: "spark [A/R/M/D]> ", else: "spark> "
+
     case IO.gets(prompt) do
-      :eof -> IO.puts("\nBye! 🐶")
-      {:error, _} -> :ok
-      nil -> :ok
+      :eof ->
+        IO.puts("\nBye! 🐶")
+
+      {:error, _} ->
+        :ok
+
+      nil ->
+        :ok
+
       line ->
         case handle_input(String.trim(line), state) do
           :exit -> :ok
@@ -136,32 +198,58 @@ defmodule Spark.CLI do
   defp repl_loop(_), do: :ok
 
   defp handle_input("", state), do: state
+
   defp handle_input(input, %{approval_mode: true} = state) do
     case String.upcase(input) do
-      "A" -> dispatch(%Command{type: :approve}, %{state | approval_mode: false})
-      "R" -> dispatch(%Command{type: :reject}, %{state | approval_mode: false})
+      "A" ->
+        dispatch(%Command{type: :approve}, %{state | approval_mode: false})
+
+      "R" ->
+        dispatch(%Command{type: :reject}, %{state | approval_mode: false})
+
       "D" ->
         if state.active_plan, do: render_plan_details(state.active_plan)
         render_approval_prompt()
         state
+
       "M" ->
         IO.write("Modification instruction: ")
         instr = String.trim(IO.gets("") || "")
-        dispatch(%Command{type: :modify, args: %{instruction: instr}}, %{state | approval_mode: false})
+
+        dispatch(%Command{type: :modify, args: %{instruction: instr}}, %{
+          state
+          | approval_mode: false
+        })
+
       _ ->
         case parse(input) do
-          {:ok, %Command{type: :empty}} -> state
-          {:ok, %Command{type: :exit} = cmd} -> dispatch(cmd, state)
-          {:ok, cmd} -> dispatch(cmd, %{state | approval_mode: false})
-          {:error, reason} -> IO.puts(IO.ANSI.red() <> "❌ #{reason}" <> IO.ANSI.reset()); state
+          {:ok, %Command{type: :empty}} ->
+            state
+
+          {:ok, %Command{type: :exit} = cmd} ->
+            dispatch(cmd, state)
+
+          {:ok, cmd} ->
+            dispatch(cmd, %{state | approval_mode: false})
+
+          {:error, reason} ->
+            IO.puts(IO.ANSI.red() <> "❌ #{reason}" <> IO.ANSI.reset())
+            state
         end
     end
   end
+
   defp handle_input(input, state) do
     case parse(input) do
-      {:ok, %Command{type: :empty}} -> state
-      {:ok, cmd} -> dispatch(cmd, state)
-      {:error, reason} -> IO.puts(IO.ANSI.red() <> "❌ #{reason}" <> IO.ANSI.reset()); state
+      {:ok, %Command{type: :empty}} ->
+        state
+
+      {:ok, cmd} ->
+        dispatch(cmd, state)
+
+      {:error, reason} ->
+        IO.puts(IO.ANSI.red() <> "❌ #{reason}" <> IO.ANSI.reset())
+        state
     end
   end
 
@@ -173,59 +261,84 @@ defmodule Spark.CLI do
   end
 
   defp dispatch(%Command{type: type, args: %{goal: ""}}, state) when type in [:plan, :code] do
-    IO.puts(IO.ANSI.yellow() <> "⚠ Usage: /#{type} <goal>" <> IO.ANSI.reset()); state
+    IO.puts(IO.ANSI.yellow() <> "⚠ Usage: /#{type} <goal>" <> IO.ANSI.reset())
+    state
   end
 
   defp dispatch(%Command{type: type, args: %{goal: goal}}, state) when type in [:plan, :code] do
     IO.puts(IO.ANSI.cyan() <> "📋 Sending to Orchestrator..." <> IO.ANSI.reset())
+
     case safe_call(fn -> Spark.Orchestrator.run(goal) end) do
       {:ok, plan} ->
         state = %{state | active_plan: plan, approval_mode: true}
-        render_plan_summary(plan); render_approval_prompt(); state
+        render_plan_summary(plan)
+        render_approval_prompt()
+        state
+
       {:error, {:invalid_phase, phase}} ->
-        IO.puts(IO.ANSI.yellow() <> "⚠ Orchestrator busy (phase: #{phase})" <> IO.ANSI.reset()); state
+        IO.puts(IO.ANSI.yellow() <> "⚠ Orchestrator busy (phase: #{phase})" <> IO.ANSI.reset())
+        state
+
       {:error, reason} ->
-        IO.puts(IO.ANSI.red() <> "❌ Planning failed: #{sanitize(reason)}" <> IO.ANSI.reset()); state
+        IO.puts(IO.ANSI.red() <> "❌ Planning failed: #{sanitize(reason)}" <> IO.ANSI.reset())
+        state
     end
   end
 
   defp dispatch(%Command{type: :approve}, %{active_plan: nil} = state) do
-    IO.puts(IO.ANSI.yellow() <> "⚠ No plan awaiting approval" <> IO.ANSI.reset()); state
+    IO.puts(IO.ANSI.yellow() <> "⚠ No plan awaiting approval" <> IO.ANSI.reset())
+    state
   end
+
   defp dispatch(%Command{type: :approve}, %{active_plan: plan} = state) do
     case safe_call(fn -> Spark.Orchestrator.approve_plan(plan.id) end) do
       {:ok, approved} ->
         IO.puts(IO.ANSI.green() <> "✅ Plan approved! Execution starting..." <> IO.ANSI.reset())
         streaming_loop(%{state | active_plan: approved, approval_mode: false})
+
       {:error, reason} ->
-        IO.puts(IO.ANSI.red() <> "❌ Approve failed: #{sanitize(reason)}" <> IO.ANSI.reset()); state
+        IO.puts(IO.ANSI.red() <> "❌ Approve failed: #{sanitize(reason)}" <> IO.ANSI.reset())
+        state
     end
   end
 
   defp dispatch(%Command{type: :reject}, %{active_plan: nil} = state) do
-    IO.puts(IO.ANSI.yellow() <> "⚠ No plan awaiting approval" <> IO.ANSI.reset()); state
+    IO.puts(IO.ANSI.yellow() <> "⚠ No plan awaiting approval" <> IO.ANSI.reset())
+    state
   end
+
   defp dispatch(%Command{type: :reject}, %{active_plan: plan} = state) do
     case safe_call(fn -> Spark.Orchestrator.reject_plan(plan.id) end) do
       {:ok, _} ->
         IO.puts(IO.ANSI.red() <> "🚫 Plan rejected" <> IO.ANSI.reset())
         %{state | active_plan: nil, approval_mode: false}
+
       {:error, reason} ->
-        IO.puts(IO.ANSI.red() <> "❌ Reject failed: #{sanitize(reason)}" <> IO.ANSI.reset()); state
+        IO.puts(IO.ANSI.red() <> "❌ Reject failed: #{sanitize(reason)}" <> IO.ANSI.reset())
+        state
     end
   end
 
   defp dispatch(%Command{type: :modify, args: %{instruction: ""}}, state) do
-    IO.puts(IO.ANSI.yellow() <> "⚠ Usage: /modify <instruction>" <> IO.ANSI.reset()); state
+    IO.puts(IO.ANSI.yellow() <> "⚠ Usage: /modify <instruction>" <> IO.ANSI.reset())
+    state
   end
-  defp dispatch(%Command{type: :modify, args: %{instruction: instr}}, %{active_plan: plan} = state) do
+
+  defp dispatch(
+         %Command{type: :modify, args: %{instruction: instr}},
+         %{active_plan: plan} = state
+       ) do
     case safe_call(fn -> Spark.Orchestrator.modify_plan(plan.id, instr) end) do
       {:ok, new_plan} ->
         IO.puts(IO.ANSI.cyan() <> "📝 Plan modified" <> IO.ANSI.reset())
         state = %{state | active_plan: new_plan, approval_mode: true}
-        render_plan_summary(new_plan); render_approval_prompt(); state
+        render_plan_summary(new_plan)
+        render_approval_prompt()
+        state
+
       {:error, reason} ->
-        IO.puts(IO.ANSI.red() <> "❌ Modify failed: #{sanitize(reason)}" <> IO.ANSI.reset()); state
+        IO.puts(IO.ANSI.red() <> "❌ Modify failed: #{sanitize(reason)}" <> IO.ANSI.reset())
+        state
     end
   end
 
@@ -245,12 +358,25 @@ defmodule Spark.CLI do
   end
 
   defp dispatch(%Command{type: :shell, args: %{command: cmd}}, state) do
-    case System.shell(cmd, stderr_to_stdout: true) do
-      {out, 0} -> IO.puts(out)
-      {out, _} -> IO.puts(IO.ANSI.red() <> out <> IO.ANSI.reset())
+    {out, exit_code} =
+      try do
+        System.cmd("sh", ["-c", cmd], stderr_to_stdout: true, timeout: 15_000)
+      rescue
+        ErlangError ->
+          IO.puts(IO.ANSI.red() <> "Command timed out after 15s" <> IO.ANSI.reset())
+          {"", 1}
+      end
+
+    case exit_code do
+      0 -> IO.puts(out)
+      _ -> unless out == "", do: IO.puts(IO.ANSI.red() <> out <> IO.ANSI.reset())
     end
+
     state
-  rescue e -> IO.puts(IO.ANSI.red() <> "Shell error: #{Exception.message(e)}" <> IO.ANSI.reset()); state
+  rescue
+    e ->
+      IO.puts(IO.ANSI.red() <> "Shell error: #{Exception.message(e)}" <> IO.ANSI.reset())
+      state
   end
 
   defp dispatch(%Command{type: :clear}, state) do
@@ -259,34 +385,55 @@ defmodule Spark.CLI do
   end
 
   defp dispatch(%Command{type: rt, args: _}, state)
-       when rt in [:reload_all, :reload_prompts, :reload_tools,
-                    :reload_config, :reload_policy, :reload_guidance, :reload_status] do
+       when rt in [
+              :reload_all,
+              :reload_prompts,
+              :reload_tools,
+              :reload_config,
+              :reload_policy,
+              :reload_guidance,
+              :reload_status
+            ] do
     handle_reload(rt, state)
   end
 
   defp dispatch(%Command{type: :prompt_lab, args: %{log_file: ""}}, state) do
-    IO.puts(IO.ANSI.yellow() <> "⚠ Usage: /prompt_lab <log_file>" <> IO.ANSI.reset()); state
+    IO.puts(IO.ANSI.yellow() <> "⚠ Usage: /prompt_lab <log_file>" <> IO.ANSI.reset())
+    state
   end
+
   defp dispatch(%Command{type: :prompt_lab, args: %{log_file: lf}}, state) do
     IO.puts(IO.ANSI.cyan() <> "🧪 Running PromptLab on #{lf}..." <> IO.ANSI.reset())
+
     case find_prompt_file() do
-      nil -> IO.puts(IO.ANSI.red() <> "❌ No prompt file found in ~/.spark/prompts/" <> IO.ANSI.reset())
+      nil ->
+        IO.puts(IO.ANSI.red() <> "❌ No prompt file found in ~/.spark/prompts/" <> IO.ANSI.reset())
+
       pf ->
         case safe_call(fn -> Spark.PromptLab.run(lf, pf) end) do
-          {:ok, report} -> render_lab_report(report)
-          {:error, r} -> IO.puts(IO.ANSI.red() <> "❌ PromptLab failed: #{sanitize(r)}" <> IO.ANSI.reset())
+          {:ok, report} ->
+            render_lab_report(report)
+
+          {:error, r} ->
+            IO.puts(IO.ANSI.red() <> "❌ PromptLab failed: #{sanitize(r)}" <> IO.ANSI.reset())
         end
     end
+
     state
   end
 
   defp dispatch(%Command{type: :refine_prompt}, state) do
     IO.puts(IO.ANSI.cyan() <> "🔬 Refining prompt..." <> IO.ANSI.reset())
     sid = state.session_id || "unknown"
+
     case safe_call(fn -> Spark.PromptRefiner.refine(sid, :orchestrator, mock_llm: true) end) do
-      {:ok, ref} -> render_refinement(ref)
-      {:error, r} -> IO.puts(IO.ANSI.red() <> "❌ Refinement failed: #{sanitize(r)}" <> IO.ANSI.reset())
+      {:ok, ref} ->
+        render_refinement(ref)
+
+      {:error, r} ->
+        IO.puts(IO.ANSI.red() <> "❌ Refinement failed: #{sanitize(r)}" <> IO.ANSI.reset())
     end
+
     state
   end
 
@@ -300,7 +447,9 @@ defmodule Spark.CLI do
   defp render_agent_menu do
     agents = safe_fetch(fn -> Spark.AgentManager.list_agents() end, %{})
 
-    IO.puts("\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Agent Manager ═══" <> IO.ANSI.reset())
+    IO.puts(
+      "\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Agent Manager ═══" <> IO.ANSI.reset()
+    )
 
     planning = Map.get(agents, "planning", %{})
     coding = Map.get(agents, "coding", %{})
@@ -310,6 +459,7 @@ defmodule Spark.CLI do
     IO.puts("  [Q]uit\n")
 
     IO.write("Select agent [P/C/Q]: ")
+
     case String.upcase(String.trim(IO.gets("") || "")) do
       "P" -> render_model_picker("planning", planning)
       "C" -> render_model_picker("coding", coding)
@@ -324,13 +474,20 @@ defmodule Spark.CLI do
     models = Spark.ModelCatalog.models_for_provider(provider)
 
     if models == [] do
-      IO.puts(IO.ANSI.yellow() <> "  No models available for provider: #{provider}" <> IO.ANSI.reset())
+      IO.puts(
+        IO.ANSI.yellow() <> "  No models available for provider: #{provider}" <> IO.ANSI.reset()
+      )
+
       return()
     end
 
     label = if agent_key == "planning", do: "Planning Agent", else: "Coding Agent"
 
-    IO.puts("\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Select Model for #{label} ═══" <> IO.ANSI.reset())
+    IO.puts(
+      "\n" <>
+        IO.ANSI.bright() <>
+        IO.ANSI.cyan() <> "═══ Select Model for #{label} ═══" <> IO.ANSI.reset()
+    )
 
     models
     |> Enum.with_index(1)
@@ -350,14 +507,22 @@ defmodule Spark.CLI do
     case Integer.parse(input) do
       {num, ""} when num >= 1 and num <= length(models) ->
         chosen = Enum.at(models, num - 1)
+
         case Spark.AgentManager.pin_model(agent_key, chosen.id) do
           {:ok, _agent} ->
-            IO.puts(IO.ANSI.green() <> "\n✅ #{label} pinned to #{chosen.name} (#{chosen.id})" <> IO.ANSI.reset())
+            IO.puts(
+              IO.ANSI.green() <>
+                "\n✅ #{label} pinned to #{chosen.name} (#{chosen.id})" <> IO.ANSI.reset()
+            )
+
           {:error, reason} ->
             IO.puts(IO.ANSI.red() <> "\n❌ Failed: #{sanitize(reason)}" <> IO.ANSI.reset())
         end
+
       _ ->
-        IO.puts(IO.ANSI.yellow() <> "  Invalid selection, keeping current model" <> IO.ANSI.reset())
+        IO.puts(
+          IO.ANSI.yellow() <> "  Invalid selection, keeping current model" <> IO.ANSI.reset()
+        )
     end
   end
 
@@ -391,17 +556,25 @@ defmodule Spark.CLI do
   # ── Approval UI (spark-98t.3) ────────────────────────────────────────
 
   defp render_plan_summary(plan) do
-    IO.puts("\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Plan Summary ═══" <> IO.ANSI.reset())
+    IO.puts(
+      "\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Plan Summary ═══" <> IO.ANSI.reset()
+    )
+
     IO.puts("  Goal:     #{plan.user_goal}")
     IO.puts("  Summary:  #{plan.summary}")
     IO.puts("  Status:   #{plan.approval_status}\n")
     IO.puts(IO.ANSI.bright() <> "  Tasks:" <> IO.ANSI.reset())
+
     Enum.each(plan.tasks, fn t ->
       IO.puts("    #{t.id}: #{t.title}")
-      IO.puts("      Risk: #{risk_ansi(t.risk)}#{t.risk}#{IO.ANSI.reset()} | " <>
-              "Deps: #{inspect(t.depends_on)} | " <>
-              "Read: #{inspect(t.read_paths)} | Write: #{inspect(t.write_paths)}")
+
+      IO.puts(
+        "      Risk: #{risk_ansi(t.risk)}#{t.risk}#{IO.ANSI.reset()} | " <>
+          "Deps: #{inspect(t.depends_on)} | " <>
+          "Read: #{inspect(t.read_paths)} | Write: #{inspect(t.write_paths)}"
+      )
     end)
+
     indep = Enum.count(plan.tasks, &(&1.depends_on == []))
     IO.puts("\n  Parallelism: #{indep} independent task(s)\n")
   end
@@ -411,7 +584,11 @@ defmodule Spark.CLI do
   end
 
   defp render_plan_details(plan) do
-    IO.puts("\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Full Task Contracts ═══" <> IO.ANSI.reset())
+    IO.puts(
+      "\n" <>
+        IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Full Task Contracts ═══" <> IO.ANSI.reset()
+    )
+
     Enum.each(plan.tasks, fn t ->
       IO.puts("\n  " <> IO.ANSI.bright() <> "Task: #{t.id} — #{t.title}" <> IO.ANSI.reset())
       IO.puts("    Description:  #{t.description}")
@@ -419,13 +596,17 @@ defmodule Spark.CLI do
       IO.puts("    Read: #{inspect(t.read_paths)} | Write: #{inspect(t.write_paths)}")
       IO.puts("    Status: #{t.status} | Retries: #{t.max_retries} | Timeout: #{t.timeout_ms}ms")
     end)
+
     IO.puts("")
   end
 
   # ── Parallel Dashboard (spark-98t.4) ─────────────────────────────────
 
   defp render_dashboard(state) do
-    IO.puts("\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Spark Dashboard ═══" <> IO.ANSI.reset())
+    IO.puts(
+      "\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Spark Dashboard ═══" <> IO.ANSI.reset()
+    )
+
     phase = safe_orchestrator_phase()
     ds = safe_dispatcher_status()
     reload = safe_last_reload()
@@ -444,23 +625,33 @@ defmodule Spark.CLI do
   defp render_workers do
     ds = safe_dispatcher_status()
     IO.puts("\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Workers ═══" <> IO.ANSI.reset())
-    IO.puts("  Active: #{Map.get(ds, :active_count, 0)} / Max: #{Map.get(ds, :max_concurrency, "—")}")
+
+    IO.puts(
+      "  Active: #{Map.get(ds, :active_count, 0)} / Max: #{Map.get(ds, :max_concurrency, "—")}"
+    )
+
     case safe_worker_task_names() do
       [] -> IO.puts("  No active workers")
       names -> Enum.each(names, &IO.puts("    🔧 #{&1}"))
     end
+
     IO.puts("")
   end
 
   defp render_tasks(state) do
     ds = safe_dispatcher_status()
     IO.puts("\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Tasks ═══" <> IO.ANSI.reset())
-    IO.puts("  Queued: #{Map.get(ds, :queue_length, 0)} | Completed: #{Map.get(ds, :completed_count, 0)} | Failed: #{Map.get(ds, :failed_count, 0)}")
+
+    IO.puts(
+      "  Queued: #{Map.get(ds, :queue_length, 0)} | Completed: #{Map.get(ds, :completed_count, 0)} | Failed: #{Map.get(ds, :failed_count, 0)}"
+    )
+
     if state.active_plan do
       Enum.each(state.active_plan.tasks, &IO.puts("    #{&1.id}: #{&1.title} [#{&1.status}]"))
     else
       IO.puts("  No active plan")
     end
+
     IO.puts("")
   end
 
@@ -473,25 +664,42 @@ defmodule Spark.CLI do
     render_reload_results(for t <- @reload_types, do: {t, do_reload(t)})
     state
   end
-  defp handle_reload(type, state) when type in [:reload_prompts, :reload_tools,
-      :reload_config, :reload_policy, :reload_guidance] do
+
+  defp handle_reload(type, state)
+       when type in [
+              :reload_prompts,
+              :reload_tools,
+              :reload_config,
+              :reload_policy,
+              :reload_guidance
+            ] do
     target = type |> Atom.to_string() |> String.replace_prefix("reload_", "") |> String.to_atom()
     IO.puts(IO.ANSI.cyan() <> "🔄 Reloading #{target}..." <> IO.ANSI.reset())
     render_reload_results([{target, do_reload(target)}])
     state
   end
+
   defp handle_reload(:reload_status, state) do
-    IO.puts("\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Reload Status ═══" <> IO.ANSI.reset())
+    IO.puts(
+      "\n" <> IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ Reload Status ═══" <> IO.ANSI.reset()
+    )
+
     case safe_coordinator_status() do
-      nil -> IO.puts("  Coordinator not available")
+      nil ->
+        IO.puts("  Coordinator not available")
+
       s ->
         IO.puts("  Status: #{s.status} | Reload count: #{s.reload_count}")
+
         if lr = s.last_reload do
           IO.puts("  Last: #{lr.type} — #{lr.status} (#{fmt_ts(lr.timestamp)})")
           if lr.error, do: IO.puts("  Error: #{inspect(lr.error)}")
         end
     end
-    for e <- safe_manifest_entries(), do: IO.puts("    #{e.component}:#{e.name} — v#{e.version} (#{e.status})")
+
+    for e <- safe_manifest_entries(),
+        do: IO.puts("    #{e.component}:#{e.name} — v#{e.version} (#{e.status})")
+
     IO.puts("")
     state
   end
@@ -509,37 +717,63 @@ defmodule Spark.CLI do
   # ── Streaming (spark-98t.5) ──────────────────────────────────────────
 
   @stream_types [:task_started, :task_completed, :task_failed, :task_queued, :task_retried]
-  @reload_events [:prompt_reloaded, :tool_reloaded, :config_reloaded, :policy_reloaded, :guidance_reloaded]
+  @reload_events [
+    :prompt_reloaded,
+    :tool_reloaded,
+    :config_reloaded,
+    :policy_reloaded,
+    :guidance_reloaded
+  ]
 
   defp streaming_loop(state) do
     receive do
       %Event{type: type, payload: p} when type in @stream_types ->
-        display_stream_event(type, p); streaming_loop(state)
+        display_stream_event(type, p)
+        streaming_loop(state)
+
       %Event{type: :orchestrator_review_completed, payload: p} ->
         review = p[:review] || p["review"] || ""
         IO.puts("  📝 Review: #{String.slice(to_string(review), 0, 200)}")
         IO.puts(IO.ANSI.green() <> "\n✅ Execution complete!" <> IO.ANSI.reset())
         %{state | active_plan: nil, approval_mode: false}
+
       %Event{type: :plan_approved} ->
         IO.puts(IO.ANSI.green() <> "📋 Plan approved — execution starting" <> IO.ANSI.reset())
         streaming_loop(state)
+
       %Event{type: type} when type in @reload_events ->
         IO.puts(IO.ANSI.cyan() <> "🔄 Hot reload: #{type}" <> IO.ANSI.reset())
         streaming_loop(state)
-      %Event{} -> streaming_loop(state)
+
+      %Event{} ->
+        streaming_loop(state)
     after
       30_000 ->
         case safe_orchestrator_phase() do
           p when p in [:completed, :awaiting_input] ->
             IO.puts(IO.ANSI.green() <> "\n✅ Execution complete!" <> IO.ANSI.reset())
             %{state | active_plan: nil, approval_mode: false}
-          _ -> streaming_loop(state)
+
+          _ ->
+            streaming_loop(state)
         end
     end
   end
 
-  @stream_icons [task_started: "🚀", task_completed: "✅", task_failed: "❌", task_queued: "📋", task_retried: "🔁"]
-  @stream_labels [task_started: "Started", task_completed: "Completed", task_failed: "Failed", task_queued: "Queued", task_retried: "Retried"]
+  @stream_icons [
+    task_started: "🚀",
+    task_completed: "✅",
+    task_failed: "❌",
+    task_queued: "📋",
+    task_retried: "🔁"
+  ]
+  @stream_labels [
+    task_started: "Started",
+    task_completed: "Completed",
+    task_failed: "Failed",
+    task_queued: "Queued",
+    task_retried: "Retried"
+  ]
 
   defp display_stream_event(type, p) do
     tid = p[:task_id] || p["task_id"] || "?"
@@ -556,36 +790,56 @@ defmodule Spark.CLI do
       %Event{type: :plan_awaiting_approval} ->
         case safe_orchestrator_state() do
           %{active_plan: %{} = plan} ->
-            render_plan_summary(plan); render_approval_prompt()
+            render_plan_summary(plan)
+            render_approval_prompt()
             flush_events(%{state | active_plan: plan, approval_mode: true})
-          _ -> flush_events(state)
+
+          _ ->
+            flush_events(state)
         end
+
       %Event{type: type, payload: p} when type in @stream_types ->
-        display_stream_event(type, p); flush_events(state)
-      %Event{} -> flush_events(state)
-    after 0 -> state end
+        display_stream_event(type, p)
+        flush_events(state)
+
+      %Event{} ->
+        flush_events(state)
+    after
+      0 -> state
+    end
   end
 
   # ── Safe wrappers (never crash the REPL) ─────────────────────────────
 
   defp safe_call(fun) do
     fun.()
-  rescue e -> {:error, Exception.message(e)}
-  catch :exit, reason -> {:error, "Process exit: #{inspect(reason)}"}
+  rescue
+    e -> {:error, Exception.message(e)}
+  catch
+    :exit, reason -> {:error, "Process exit: #{inspect(reason)}"}
   end
 
   defp safe_orchestrator_phase, do: safe_fetch(fn -> Spark.Orchestrator.get_state().phase end)
   defp safe_orchestrator_state, do: safe_fetch(fn -> Spark.Orchestrator.get_state() end)
   defp safe_dispatcher_status, do: safe_fetch(fn -> Spark.Dispatcher.status() end, %{})
-  defp safe_prompt_version, do: safe_fetch(fn -> Spark.Orchestrator.get_state().prompt_version end, "unknown")
-  defp safe_last_reload, do: safe_fetch(fn -> Spark.HotReload.Coordinator.status().last_reload end)
+
+  defp safe_prompt_version,
+    do: safe_fetch(fn -> Spark.Orchestrator.get_state().prompt_version end, "unknown")
+
+  defp safe_last_reload,
+    do: safe_fetch(fn -> Spark.HotReload.Coordinator.status().last_reload end)
+
   defp safe_coordinator_status, do: safe_fetch(fn -> Spark.HotReload.Coordinator.status() end)
 
   defp safe_worker_task_names do
-    safe_fetch(fn ->
-      :sys.get_state(Spark.Dispatcher).active_workers
-      |> Map.values() |> Enum.map(& &1.task.title)
-    end, [])
+    safe_fetch(
+      fn ->
+        :sys.get_state(Spark.Dispatcher).active_workers
+        |> Map.values()
+        |> Enum.map(& &1.task.title)
+      end,
+      []
+    )
   end
 
   defp safe_manifest_entries, do: safe_fetch(fn -> Spark.HotReload.Manifest.list() end, [])
@@ -604,7 +858,11 @@ defmodule Spark.CLI do
   defp render_lab_report(r) do
     IO.puts(IO.ANSI.bright() <> IO.ANSI.cyan() <> "═══ PromptLab Report ═══" <> IO.ANSI.reset())
     IO.puts("  Log: #{r.log_file} | Prompt: #{r.prompt_file}")
-    IO.puts("  Tool calls: #{r.tool_call_count} | Failures: #{r.failure_count} | Retries: #{r.retry_count}")
+
+    IO.puts(
+      "  Tool calls: #{r.tool_call_count} | Failures: #{r.failure_count} | Retries: #{r.retry_count}"
+    )
+
     IO.puts("  Token est: #{r.token_estimate} | Policy violations: #{r.policy_violations}")
     if r.notes != [], do: Enum.each(r.notes, &IO.puts("    • #{&1}"))
     IO.puts("")
@@ -623,7 +881,7 @@ defmodule Spark.CLI do
 
   defp find_prompt_file do
     dir = Path.join(Spark.Config.home_dir(), "prompts")
-    if File.dir?(dir), do: (Path.wildcard(Path.join(dir, "*.md")) |> List.first())
+    if File.dir?(dir), do: Path.wildcard(Path.join(dir, "*.md")) |> List.first()
   end
 
   defp sanitize(r) when is_binary(r), do: redact_secrets(r)

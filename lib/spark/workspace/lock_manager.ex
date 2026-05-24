@@ -20,6 +20,7 @@ defmodule Spark.Workspace.LockManager do
   @doc """
   Starts the LockManager GenServer.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
@@ -155,10 +156,10 @@ defmodule Spark.Workspace.LockManager do
   # This catches: same path, parent/child, sibling ambiguity.
   defp paths_overlap?(path_a, path_b) do
     # Exact match
+    # path_a is a parent of path_b
+    # path_b is a parent of path_a
     path_a == path_b or
-      # path_a is a parent of path_b
       String.starts_with?(path_b, path_a <> "/") or
-      # path_b is a parent of path_a
       String.starts_with?(path_a, path_b <> "/")
   end
 

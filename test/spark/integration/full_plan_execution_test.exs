@@ -36,7 +36,8 @@ defmodule Spark.Integration.FullPlanExecutionTest do
       if pid = Process.whereis(name) do
         try do
           GenServer.stop(pid, :shutdown)
-        catch :exit, _ -> :ok
+        catch
+          :exit, _ -> :ok
         end
       end
     end
@@ -54,11 +55,13 @@ defmodule Spark.Integration.FullPlanExecutionTest do
     EventBus.add_hook(:orch_bridge, fn event ->
       case event.type do
         :task_completed ->
-          result = WorkerResult.success(%{
-            task_id: event.task_id || Map.get(event.payload, :task_id, ""),
-            worker_id: Map.get(event.payload, :worker_id, "fake"),
-            summary: Map.get(event.payload, :result, "fake success") |> to_string()
-          })
+          result =
+            WorkerResult.success(%{
+              task_id: event.task_id || Map.get(event.payload, :task_id, ""),
+              worker_id: Map.get(event.payload, :worker_id, "fake"),
+              summary: Map.get(event.payload, :result, "fake success") |> to_string()
+            })
+
           try do
             Orchestrator.task_completed(result)
           catch
@@ -66,12 +69,14 @@ defmodule Spark.Integration.FullPlanExecutionTest do
           end
 
         :task_failed ->
-          result = WorkerResult.failure(%{
-            task_id: event.task_id || Map.get(event.payload, :task_id, ""),
-            worker_id: Map.get(event.payload, :worker_id, "fake"),
-            summary: "Task failed",
-            errors: [%{reason: Map.get(event.payload, :reason, "unknown") |> to_string()}]
-          })
+          result =
+            WorkerResult.failure(%{
+              task_id: event.task_id || Map.get(event.payload, :task_id, ""),
+              worker_id: Map.get(event.payload, :worker_id, "fake"),
+              summary: "Task failed",
+              errors: [%{reason: Map.get(event.payload, :reason, "unknown") |> to_string()}]
+            })
+
           try do
             Orchestrator.task_failed(result)
           catch
@@ -99,7 +104,8 @@ defmodule Spark.Integration.FullPlanExecutionTest do
       for name <- [Spark.Orchestrator, Spark.Dispatcher, Spark.Policy] do
         try do
           if pid = Process.whereis(name), do: GenServer.stop(pid, :shutdown)
-        catch :exit, _ -> :ok
+        catch
+          :exit, _ -> :ok
         end
       end
 
@@ -107,7 +113,8 @@ defmodule Spark.Integration.FullPlanExecutionTest do
         # Don't stop Config Agent — it belongs to the Application tree
         # and stopping it can cascade to kill other processes.
         :ok
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
 
       File.rm_rf!(tmp_dir)
@@ -118,8 +125,6 @@ defmodule Spark.Integration.FullPlanExecutionTest do
 
   # --- Helpers ---
 
-
-
   defp ensure_config do
     if Process.whereis(Spark.Config) == nil do
       case Spark.Config.start_link([]) do
@@ -129,7 +134,7 @@ defmodule Spark.Integration.FullPlanExecutionTest do
     end
   end
 
-  defp plan_response(task_count \\ 2) do
+  defp plan_response(task_count) do
     tasks =
       for i <- 1..task_count do
         %{
@@ -191,7 +196,7 @@ defmodule Spark.Integration.FullPlanExecutionTest do
     pid
   end
 
-  defp wait_for_phase(expected, timeout \\ 3000) do
+  defp wait_for_phase(expected, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
     do_wait_for_phase(expected, deadline)
   end
@@ -200,15 +205,19 @@ defmodule Spark.Integration.FullPlanExecutionTest do
     state = Orchestrator.get_state()
 
     cond do
-      state.phase == phase -> :ok
-      System.monotonic_time(:millisecond) >= deadline -> :timeout
+      state.phase == phase ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        :timeout
+
       true ->
         Process.sleep(20)
         do_wait_for_phase(phase, deadline)
     end
   end
 
-  defp collect_events(event_types, timeout \\ 2000) do
+  defp collect_events(event_types, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
     do_collect_events(event_types, deadline, [])
   end
@@ -298,12 +307,21 @@ defmodule Spark.Integration.FullPlanExecutionTest do
       wait_for_phase(:completed, 5000)
 
       # Collect events that arrived on spark:events (global firehose)
-      all_events = collect_events(
-        [:plan_awaiting_approval, :plan_approved, :task_queued, :task_started,
-         :task_completed, :orchestrator_review_started, :orchestrator_review_completed,
-         :llm_call_started, :llm_call_completed],
-        500
-      )
+      all_events =
+        collect_events(
+          [
+            :plan_awaiting_approval,
+            :plan_approved,
+            :task_queued,
+            :task_started,
+            :task_completed,
+            :orchestrator_review_started,
+            :orchestrator_review_completed,
+            :llm_call_started,
+            :llm_call_completed
+          ],
+          500
+        )
 
       event_type_set = all_events |> Enum.map(& &1.type) |> MapSet.new()
 
@@ -313,14 +331,22 @@ defmodule Spark.Integration.FullPlanExecutionTest do
              "Expected :plan_approved event, got: #{MapSet.to_list(event_type_set) |> inspect}"
 
       # Task events should be present if workers ran
-      has_task_events = Enum.any?([:task_queued, :task_started, :task_completed], &MapSet.member?(event_type_set, &1))
+      has_task_events =
+        Enum.any?(
+          [:task_queued, :task_started, :task_completed],
+          &MapSet.member?(event_type_set, &1)
+        )
+
       assert has_task_events, "Expected at least some task events"
 
       # LLM events should be present (Orchestrator calls LLM)
-      has_llm_events = Enum.any?([:llm_call_started, :llm_call_completed], &MapSet.member?(event_type_set, &1))
+      has_llm_events =
+        Enum.any?([:llm_call_started, :llm_call_completed], &MapSet.member?(event_type_set, &1))
+
       assert has_llm_events, "Expected LLM call events"
 
       EventBus.unsubscribe(plan_topic)
+
       for task <- plan.tasks do
         EventBus.unsubscribe("spark:task:#{task.id}")
       end
@@ -330,11 +356,12 @@ defmodule Spark.Integration.FullPlanExecutionTest do
       session_id = "full_plan_session"
 
       _pid =
-        start_orchestrator_with_mocks([
-          plan_response(2),
-          review_response()
-        ],
-        session_id: session_id
+        start_orchestrator_with_mocks(
+          [
+            plan_response(2),
+            review_response()
+          ],
+          session_id: session_id
         )
 
       {:ok, plan} = Orchestrator.run("Build a hello world app")
@@ -343,11 +370,25 @@ defmodule Spark.Integration.FullPlanExecutionTest do
       wait_for_phase(:completed, 5000)
 
       # Manually log key events to Bronze (simulating a Bronze subscriber process)
-      Bronze.append(session_id, %{type: :plan_approved, source: :orchestrator, payload: %{plan_id: plan.id}})
+      Bronze.append(session_id, %{
+        type: :plan_approved,
+        source: :orchestrator,
+        payload: %{plan_id: plan.id}
+      })
+
       for task <- plan.tasks do
-        Bronze.append(session_id, %{type: :task_completed, source: :dispatcher, payload: %{task_id: task.id}})
+        Bronze.append(session_id, %{
+          type: :task_completed,
+          source: :dispatcher,
+          payload: %{task_id: task.id}
+        })
       end
-      Bronze.append(session_id, %{type: :orchestrator_review_completed, source: :orchestrator, payload: %{}})
+
+      Bronze.append(session_id, %{
+        type: :orchestrator_review_completed,
+        source: :orchestrator,
+        payload: %{}
+      })
 
       # Verify Bronze log exists and has content
       bronze_path = Bronze.session_path(session_id)
@@ -376,7 +417,11 @@ defmodule Spark.Integration.FullPlanExecutionTest do
       assert Orchestrator.get_state().phase == :awaiting_approval
 
       # Phase: :awaiting_approval → :executing
-      {:ok, _plan} = Orchestrator.get_state() |> Map.fetch!(:active_plan) |> then(&Orchestrator.approve_plan(&1.id))
+      {:ok, _plan} =
+        Orchestrator.get_state()
+        |> Map.fetch!(:active_plan)
+        |> then(&Orchestrator.approve_plan(&1.id))
+
       assert Orchestrator.get_state().phase == :executing
 
       # Phase: :executing → :reviewing → :completed
@@ -424,6 +469,7 @@ defmodule Spark.Integration.FullPlanExecutionTest do
 
       # All tasks should have results (completed or failed)
       all_ids = Plan.task_ids(state.active_plan) |> MapSet.new()
+
       result_ids =
         MapSet.union(
           MapSet.new(Map.keys(state.completed_results)),

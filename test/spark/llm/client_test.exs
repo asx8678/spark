@@ -27,6 +27,7 @@ defmodule Spark.LLM.ClientTest do
       Application.put_env(:spark, :home_dir, original_home)
       MockProvider.clear(self())
       EventBus.clear_hooks()
+
       try do
         if pid = Process.whereis(Spark.Config), do: Agent.stop(pid)
       catch
@@ -45,12 +46,13 @@ defmodule Spark.LLM.ClientTest do
 
     test "returns queued mock response" do
       MockProvider.set_responses(self(), [
-        {:ok, %{
-          id: "custom-1",
-          model: "test-model",
-          choices: [%{message: %{role: "assistant", content: "Custom response"}}],
-          usage: %{prompt_tokens: 5, completion_tokens: 3, total_tokens: 8}
-        }}
+        {:ok,
+         %{
+           id: "custom-1",
+           model: "test-model",
+           choices: [%{message: %{role: "assistant", content: "Custom response"}}],
+           usage: %{prompt_tokens: 5, completion_tokens: 3, total_tokens: 8}
+         }}
       ])
 
       assert {:ok, response} = Client.complete(:orchestrator, [%{role: "user", content: "Hi"}])
@@ -92,6 +94,20 @@ defmodule Spark.LLM.ClientTest do
       Spark.Config.put([:llm, :worker_provider], "nonexistent")
       assert Client.resolve_provider(:worker) == Spark.LLM.MockProvider
       Spark.Config.put([:llm, :worker_provider], "mock")
+    end
+
+    test "resolve_api_key handles unknown provider safely without creating new atoms" do
+      Spark.Config.put([:llm, :orchestrator_provider], "brand_new_unseen_provider_xyz")
+      atom_name = "brand_new_unseen_provider_xyz_api_key"
+
+      # Verify the atom does not exist beforehand
+      assert_raise ArgumentError, fn -> String.to_existing_atom(atom_name) end
+
+      # Execute client resolution logic
+      assert {:ok, _} = Client.complete(:orchestrator, [%{role: "user", content: "Hi"}])
+
+      # Verify the atom STILL does not exist (was not created dynamically)
+      assert_raise ArgumentError, fn -> String.to_existing_atom(atom_name) end
     end
   end
 
@@ -137,7 +153,8 @@ defmodule Spark.LLM.ClientTest do
         send(self(), {:stream, event})
       end
 
-      assert {:ok, _} = Client.stream(:orchestrator, [%{role: "user", content: "Stream"}], %{}, callback)
+      assert {:ok, _} =
+               Client.stream(:orchestrator, [%{role: "user", content: "Stream"}], %{}, callback)
 
       # Should receive chunk events
       assert_receive {:stream, {:chunk, %{delta: %{content: _}}}}, 1_000

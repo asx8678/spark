@@ -1,7 +1,12 @@
 defmodule Spark.TUI.Update do
   @moduledoc "TUI message handler / update logic."
 
-  alias Spark.TUI.{Actions, Model}
+  require Logger
+
+  # dialyxir bug: TermUI macro generates unreachable comparison (unknown warning type :exact_compare)
+  @dialyzer {:nowarn_function, handle_shell_input: 2}
+
+  alias Spark.TUI.Model
 
   @esc 0x1B
   @enter 0x0D
@@ -12,273 +17,423 @@ defmodule Spark.TUI.Update do
 
   @doc """
   Handles a single message and returns the updated model.
-
-  Ratatouille's runtime intercepts q/Q/ctrl-c as quit events *before*
-  calling update/2, so those never reach us. They're listed in help
-  text but don't need explicit handling here.
   """
-
   def update(%Model{} = model, msg), do: handle(model, msg)
 
-  # --- Command result handlers ---
+  # ── 2. Async result handlers (view_mode transitions) ──
 
   defp handle(model, {:plan_result, {:ok, plan}}) do
-    %{model | loading?: false, active_plan: plan, screen: :plan_review,
-      selected_task_index: 0, status_message: "Plan ready", error_message: nil}
+    %{
+      model
+      | loading?: false,
+        active_plan: plan,
+        view_mode: :plan_review,
+        command_mode: :approve,
+        selected_task_index: 0,
+        scroll_offset: 0,
+        scroll_top: 0,
+        status_message: "Plan ready",
+        error_message: nil,
+        streaming_content: ""
+    }
   end
 
   defp handle(model, {:plan_result, {:error, reason}}) do
-    %{model | loading?: false, error_message: "Planning failed: #{format_reason(reason)}",
-      status_message: nil}
+    %{
+      model
+      | loading?: false,
+        error_message: "Planning failed: #{format_reason(reason)}",
+        status_message: nil,
+        streaming_content: ""
+    }
   end
 
   defp handle(model, {:approve_result, {:ok, _plan}}) do
     model = refresh_runtime(model)
-    %{model | screen: :dashboard, previous_screen: :plan_review,
-      status_message: "Plan approved. Execution starting...", error_message: nil}
+
+    %{
+      model
+      | view_mode: :execution,
+        command_mode: :chat,
+        scroll_top: 0,
+        status_message: "Plan approved. Execution starting...",
+        error_message: nil
+    }
   end
 
   defp handle(model, {:approve_result, {:error, reason}}) do
-    %{model | error_message: "Approval failed: #{format_reason(reason)}", status_message: nil}
+    %{
+      model
+      | error_message: "Approval failed: #{format_reason(reason)}",
+        status_message: nil,
+        loading?: false
+    }
   end
 
   defp handle(model, {:reject_result, {:ok, _plan}}) do
-    %{model | screen: :home, previous_screen: :plan_review,
-      active_plan: nil, status_message: "Plan rejected", error_message: nil}
+    %{
+      model
+      | view_mode: :welcome,
+        command_mode: :chat,
+        scroll_top: 0,
+        active_plan: nil,
+        status_message: "Plan rejected",
+        error_message: nil,
+        loading?: false
+    }
   end
 
   defp handle(model, {:reject_result, {:error, reason}}) do
-    %{model | error_message: "Rejection failed: #{format_reason(reason)}", status_message: nil}
+    %{
+      model
+      | error_message: "Rejection failed: #{format_reason(reason)}",
+        status_message: nil,
+        loading?: false
+    }
   end
 
-  # --- Plan Input screen handlers ---
+  defp handle(model, {:pin_result, {:ok, agent}}) do
+    model = refresh_runtime(model)
 
-  defp handle(%{screen: :plan_input} = model, {:event, %{key: @esc}}) do
-    %{model | screen: :home, previous_screen: :plan_input,
-      loading?: false, input_buffer: "", status_message: nil, error_message: nil}
+    %{
+      model
+      | loading?: false,
+        selected_agent: nil,
+        selected_index: 0,
+        selected_model_index: 0,
+        status_message: "✅ Pinned #{agent["actor_type"]} agent to #{agent["model"]}",
+        error_message: nil
+    }
   end
 
-  # Printable characters in plan_input
-  defp handle(%{screen: :plan_input, loading?: false} = model, {:event, %{ch: ch}})
-       when is_integer(ch) and ch >= 32 do
-    %{model | input_buffer: model.input_buffer <> <<ch::utf8>>}
+  defp handle(model, {:pin_result, {:error, reason}}) do
+    %{
+      model
+      | loading?: false,
+        error_message: "Pinning failed: #{format_reason(reason)}",
+        status_message: nil
+    }
   end
 
-  # Backspace in plan_input
-  defp handle(%{screen: :plan_input, loading?: false} = model, {:event, %{key: @backspace}}) do
-    %{model | input_buffer: trim_last(model.input_buffer)}
+  # ── Esc — context-aware back (approve & agent_picker only) ──
+
+  defp handle(
+         %{command_mode: :agent_picker, selected_agent: agent_key} = model,
+         {:event, %{key: @esc}}
+       )
+       when not is_nil(agent_key) do
+    %{
+      model
+      | selected_agent: nil,
+        selected_index: 0,
+        selected_model_index: 0,
+        status_message: nil,
+        error_message: nil
+    }
   end
 
-  defp handle(%{screen: :plan_input, loading?: false} = model, {:event, %{key: @backspace2}}) do
-    %{model | input_buffer: trim_last(model.input_buffer)}
-  end
+  defp handle(%{command_mode: :agent_picker} = model, {:event, %{key: @esc}}),
+    do: %{model | command_mode: :chat, status_message: nil, error_message: nil}
 
-  # Enter in plan_input — submit goal
-  defp handle(%{screen: :plan_input, loading?: false} = model, {:event, %{key: @enter}}) do
-    goal = String.trim(model.input_buffer)
+  defp handle(%{command_mode: :approve} = model, {:event, %{key: @esc}}),
+    do: %{
+      model
+      | command_mode: :chat,
+        view_mode: :welcome,
+        status_message: nil,
+        error_message: nil
+    }
 
-    if goal == "" do
-      %{model | error_message: "Please enter a goal", status_message: nil}
+  # ── q/Q quit (non-chat only; chat mode swallows to avoid accidental quit) ──
+
+  defp handle(%{command_mode: :chat} = model, {:event, %{ch: ?q}}), do: model
+  defp handle(%{command_mode: :chat} = model, {:event, %{ch: ?Q}}), do: model
+  defp handle(_model, {:event, %{ch: ?q}}), do: {:quit, nil}
+  defp handle(_model, {:event, %{ch: ?Q}}), do: {:quit, nil}
+
+  # ── CHAT mode handlers ──
+
+  # Typing in chat mode
+  defp handle(%{command_mode: :chat, loading?: false} = model, {:event, %{ch: ch}})
+       when is_integer(ch) and ch >= 32,
+       do: %{model | input_buffer: model.input_buffer <> <<ch::utf8>>}
+
+  # Backspace
+  defp handle(%{command_mode: :chat, loading?: false} = model, {:event, %{key: @backspace}}),
+    do: %{model | input_buffer: trim_last(model.input_buffer)}
+
+  defp handle(%{command_mode: :chat, loading?: false} = model, {:event, %{key: @backspace2}}),
+    do: %{model | input_buffer: trim_last(model.input_buffer)}
+
+  # Enter in chat → submit plan, shell command, or handle slash command
+  defp handle(%{command_mode: :chat, loading?: false} = model, {:event, %{key: @enter}}) do
+    input = String.trim(model.input_buffer)
+
+    if input == "" do
+      %{model | error_message: "Enter a goal or slash command (/help)", status_message: nil}
     else
-      cmd = %{function: fn -> Actions.start_plan(goal) end, message: :plan_result}
-      model = %{model | loading?: true, status_message: "Planning with DeepSeek...", error_message: nil}
-      {model, cmd}
+      cond do
+        String.starts_with?(input, "/") ->
+          handle_slash_command(input, model)
+
+        String.starts_with?(input, "!") ->
+          handle_shell_input(input, model)
+
+        true ->
+          cmd = %{
+            function: fn tui_pid -> Spark.TUI.Actions.start_plan_streaming(input, tui_pid) end,
+            message: :plan_result
+          }
+
+          model = %{
+            model
+            | loading?: true,
+              status_message: "Planning...",
+              error_message: nil,
+              input_buffer: "",
+              streaming_content: ""
+          }
+
+          {model, cmd}
+      end
     end
   end
 
-  # Allow Escape to cancel while loading, ignore other keys
-  defp handle(%{screen: :plan_input, loading?: true} = model, {:event, %{key: @esc}}) do
-    %{model | screen: :home, loading?: false, input_buffer: "", status_message: "Plan cancelled", error_message: nil}
-  end
-  defp handle(%{screen: :plan_input, loading?: true} = model, _msg), do: model
+  # Esc in chat while loading → cancel
+  defp handle(%{command_mode: :chat, loading?: true} = model, {:event, %{key: @esc}}),
+    do: %{
+      model
+      | command_mode: :chat,
+        loading?: false,
+        input_buffer: "",
+        status_message: "Plan cancelled",
+        error_message: nil,
+        streaming_content: ""
+    }
 
-  # --- Plan Review screen handlers (before global navigation) ---
+  # Ignore other keys while loading in chat
+  defp handle(%{command_mode: :chat, loading?: true} = model, _msg), do: model
 
-  defp handle(%{screen: :plan_review} = model, {:event, %{key: @esc}}) do
-    %{model | screen: :home, previous_screen: :plan_review, status_message: nil, error_message: nil}
-  end
+  # ── APPROVE mode handlers ──
 
-  defp handle(%{screen: :plan_review} = model, {:event, %{ch: ?j}}) do
-    %{model | selected_task_index: min(model.selected_task_index + 1, max(task_count(model) - 1, 0))}
-  end
+  defp handle(%{command_mode: :approve} = model, {:event, %{ch: ?a}}), do: do_approve(model)
+  defp handle(%{command_mode: :approve} = model, {:event, %{ch: ?A}}), do: do_approve(model)
+  defp handle(%{command_mode: :approve} = model, {:event, %{ch: ?r}}), do: do_reject(model)
+  defp handle(%{command_mode: :approve} = model, {:event, %{ch: ?R}}), do: do_reject(model)
+  defp handle(%{command_mode: :approve} = model, {:event, %{key: @enter}}), do: do_approve(model)
 
-  defp handle(%{screen: :plan_review} = model, {:event, %{ch: ?k}}) do
-    %{model | selected_task_index: max(model.selected_task_index - 1, 0)}
-  end
+  # Task navigation in approve mode
+  defp handle(%{command_mode: :approve} = model, {:event, %{key: key}})
+       when key in [@arrow_up, @arrow_down] do
+    diff = if key == @arrow_up, do: -1, else: 1
+    tasks = if model.active_plan, do: model.active_plan.tasks || [], else: []
+    tasks_count = length(tasks)
 
-  defp handle(%{screen: :plan_review} = model, {:event, %{ch: ?J}}) do
-    %{model | selected_task_index: min(model.selected_task_index + 1, max(task_count(model) - 1, 0))}
-  end
-
-  defp handle(%{screen: :plan_review} = model, {:event, %{ch: ?K}}) do
-    %{model | selected_task_index: max(model.selected_task_index - 1, 0)}
-  end
-
-  defp handle(%{screen: :plan_review} = model, {:event, %{key: @arrow_up}}) do
-    %{model | selected_task_index: max(model.selected_task_index - 1, 0)}
-  end
-
-  defp handle(%{screen: :plan_review} = model, {:event, %{key: @arrow_down}}) do
-    %{model | selected_task_index: min(model.selected_task_index + 1, max(task_count(model) - 1, 0))}
-  end
-
-  # Approve plan
-  defp handle(%{screen: :plan_review} = model, {:event, %{ch: ?a}}), do: do_approve(model)
-  defp handle(%{screen: :plan_review} = model, {:event, %{ch: ?A}}), do: do_approve(model)
-
-  # Enter to approve plan
-  defp handle(%{screen: :plan_review} = model, {:event, %{key: @enter}}), do: do_approve(model)
-
-  # Reject plan
-  defp handle(%{screen: :plan_review} = model, {:event, %{ch: ?r}}), do: do_reject(model)
-  defp handle(%{screen: :plan_review} = model, {:event, %{ch: ?R}}), do: do_reject(model)
-
-  # --- Global/Home navigation (printable chars use `ch`, not `key`) ---
-  # These must come AFTER screen-specific handlers to avoid overriding
-  # p/P in agent_manager or plan_input/plan_review screens.
-
-  defp handle(model, {:event, %{ch: ?a}}), do: open_agent_manager(model)
-  defp handle(model, {:event, %{ch: ?A}}), do: open_agent_manager(model)
-
-  defp handle(model, {:event, %{ch: ?d}}), do: open_dashboard(model)
-  defp handle(model, {:event, %{ch: ?D}}), do: open_dashboard(model)
-
-  defp handle(model, {:event, %{ch: ?l}}), do: open_logs(model)
-  defp handle(model, {:event, %{ch: ?L}}), do: open_logs(model)
-
-  defp handle(model, {:event, %{ch: ?r}}), do: refresh_current(model)
-  defp handle(model, {:event, %{ch: ?R}}), do: refresh_current(model)
-
-  defp handle(model, {:event, %{ch: ?h}}), do: %{model | screen: :home, previous_screen: model.screen}
-  defp handle(model, {:event, %{ch: ?H}}), do: %{model | screen: :home, previous_screen: model.screen}
-
-  # P/p: open plan_input from home/dashboard/logs (not agent_manager)
-  defp handle(%{screen: screen} = model, {:event, %{ch: ?p}})
-       when screen in [:home, :dashboard, :logs] do
-    %{model | screen: :plan_input, previous_screen: model.screen,
-      input_buffer: "", loading?: false, status_message: nil, error_message: nil}
+    if tasks_count > 0 do
+      new_idx = max(0, min((model.selected_task_index || 0) + diff, tasks_count - 1))
+      %{model | selected_task_index: new_idx}
+    else
+      model
+    end
   end
 
-  defp handle(%{screen: screen} = model, {:event, %{ch: ?P}})
-       when screen in [:home, :dashboard, :logs] do
-    %{model | screen: :plan_input, previous_screen: model.screen,
-      input_buffer: "", loading?: false, status_message: nil, error_message: nil}
+  defp handle(%{command_mode: :approve} = model, {:event, %{ch: ch}}) when ch in [?k, ?j] do
+    diff = if ch == ?k, do: -1, else: 1
+    tasks = if model.active_plan, do: model.active_plan.tasks || [], else: []
+    tasks_count = length(tasks)
+
+    if tasks_count > 0 do
+      new_idx = max(0, min((model.selected_task_index || 0) + diff, tasks_count - 1))
+      %{model | selected_task_index: new_idx}
+    else
+      model
+    end
   end
 
-  # ?/? opens help screen
-  defp handle(model, {:event, %{ch: ??}}), do: %{model | screen: :help, previous_screen: model.screen}
+  # ── AGENT PICKER mode handlers ──
 
-  # Escape — context-aware back navigation
-  defp handle(%{screen: :help} = model, {:event, %{key: @esc}}), do: %{model | screen: model.previous_screen || :home, previous_screen: :help}
+  # 1. Navigation when selected_agent is nil (choosing agent planning/coding)
+  defp handle(%{command_mode: :agent_picker, selected_agent: nil} = model, {:event, %{key: key}})
+       when key in [@arrow_up, @arrow_down] do
+    diff = if key == @arrow_up, do: -1, else: 1
+    agents_count = length(ordered_agents(model))
 
-  defp handle(%{screen: :model_picker} = model, {:event, %{key: @esc}}) do
-    %{model | screen: :agent_manager, previous_screen: :model_picker,
-      status_message: nil, error_message: nil}
+    if agents_count > 0 do
+      new_idx = Integer.mod((model.selected_index || 0) + diff, agents_count)
+      %{model | selected_index: new_idx}
+    else
+      model
+    end
   end
 
-  defp handle(model, {:event, %{key: @esc}}), do: %{model | screen: :home, previous_screen: model.screen}
+  defp handle(%{command_mode: :agent_picker, selected_agent: nil} = model, {:event, %{ch: ch}})
+       when ch in [?k, ?j] do
+    diff = if ch == ?k, do: -1, else: 1
+    agents_count = length(ordered_agents(model))
 
-  # --- Agent Manager screen handlers ---
-
-  defp handle(%{screen: :agent_manager} = model, {:event, %{ch: ?p}}) do
-    open_model_picker(model, "planning")
+    if agents_count > 0 do
+      new_idx = Integer.mod((model.selected_index || 0) + diff, agents_count)
+      %{model | selected_index: new_idx}
+    else
+      model
+    end
   end
 
-  defp handle(%{screen: :agent_manager} = model, {:event, %{ch: ?P}}) do
-    open_model_picker(model, "planning")
+  # 2. Enter key when selected_agent is nil (locks in agent choice, transitions to model picker)
+  defp handle(
+         %{command_mode: :agent_picker, selected_agent: nil} = model,
+         {:event, %{key: @enter}}
+       ) do
+    agents = ordered_agents(model)
+
+    case Enum.at(agents, model.selected_index || 0) do
+      {agent_key, _config} ->
+        %{
+          model
+          | selected_agent: agent_key,
+            selected_model_index: 0,
+            status_message: nil,
+            error_message: nil
+        }
+
+      nil ->
+        model
+    end
   end
 
-  defp handle(%{screen: :agent_manager} = model, {:event, %{ch: ?c}}) do
-    open_model_picker(model, "coding")
-  end
-
-  defp handle(%{screen: :agent_manager} = model, {:event, %{ch: ?C}}) do
-    open_model_picker(model, "coding")
-  end
-
-  defp handle(%{screen: :agent_manager} = model, {:event, %{key: @enter}}) do
-    agent_key = selected_agent_key(model)
-    open_model_picker(model, agent_key)
-  end
-
-  defp handle(%{screen: :agent_manager} = model, {:event, %{ch: ?k}}) do
-    %{model | selected_index: max(model.selected_index - 1, 0)}
-  end
-
-  defp handle(%{screen: :agent_manager} = model, {:event, %{ch: ?j}}) do
-    agent_count = map_size(model.agents)
-    %{model | selected_index: min(model.selected_index + 1, max(agent_count - 1, 0))}
-  end
-
-  defp handle(%{screen: :agent_manager} = model, {:event, %{key: @arrow_up}}) do
-    %{model | selected_index: max(model.selected_index - 1, 0)}
-  end
-
-  defp handle(%{screen: :agent_manager} = model, {:event, %{key: @arrow_down}}) do
-    agent_count = map_size(model.agents)
-    %{model | selected_index: min(model.selected_index + 1, max(agent_count - 1, 0))}
-  end
-
-  # --- Model Picker screen handlers ---
-
-  defp handle(%{screen: :model_picker} = model, {:event, %{ch: ?k}}) do
-    %{model | selected_model_index: max(model.selected_model_index - 1, 0)}
-  end
-
-  defp handle(%{screen: :model_picker} = model, {:event, %{ch: ?j}}) do
-    agent_cfg = Map.get(model.agents, model.selected_agent, %{})
-    provider = agent_cfg["provider"] || ""
+  # 3. Navigation when selected_agent is NOT nil (choosing model)
+  defp handle(
+         %{command_mode: :agent_picker, selected_agent: agent_key} = model,
+         {:event, %{key: key}}
+       )
+       when key in [@arrow_up, @arrow_down] and not is_nil(agent_key) do
+    diff = if key == @arrow_up, do: -1, else: 1
+    agent = Map.get(model.agents || %{}, agent_key)
+    provider = if agent, do: agent["provider"], else: "unknown"
     models = Spark.ModelCatalog.models_for_provider(provider)
-    max_idx = max(length(models) - 1, 0)
-    %{model | selected_model_index: min(model.selected_model_index + 1, max_idx)}
+    models_count = length(models)
+
+    if models_count > 0 do
+      new_idx = Integer.mod((model.selected_model_index || 0) + diff, models_count)
+      %{model | selected_model_index: new_idx}
+    else
+      model
+    end
   end
 
-  defp handle(%{screen: :model_picker} = model, {:event, %{key: @arrow_up}}) do
-    %{model | selected_model_index: max(model.selected_model_index - 1, 0)}
-  end
-
-  defp handle(%{screen: :model_picker} = model, {:event, %{key: @arrow_down}}) do
-    agent_cfg = Map.get(model.agents, model.selected_agent, %{})
-    provider = agent_cfg["provider"] || ""
+  defp handle(
+         %{command_mode: :agent_picker, selected_agent: agent_key} = model,
+         {:event, %{ch: ch}}
+       )
+       when ch in [?k, ?j] and not is_nil(agent_key) do
+    diff = if ch == ?k, do: -1, else: 1
+    agent = Map.get(model.agents || %{}, agent_key)
+    provider = if agent, do: agent["provider"], else: "unknown"
     models = Spark.ModelCatalog.models_for_provider(provider)
-    max_idx = max(length(models) - 1, 0)
-    %{model | selected_model_index: min(model.selected_model_index + 1, max_idx)}
+    models_count = length(models)
+
+    if models_count > 0 do
+      new_idx = Integer.mod((model.selected_model_index || 0) + diff, models_count)
+      %{model | selected_model_index: new_idx}
+    else
+      model
+    end
   end
 
-  defp handle(%{screen: :model_picker} = model, {:event, %{key: @enter}}) do
-    pin_selected_model(model)
+  # 4. Enter key when selected_agent is NOT nil (pins the model)
+  defp handle(
+         %{command_mode: :agent_picker, selected_agent: agent_key} = model,
+         {:event, %{key: @enter}}
+       )
+       when not is_nil(agent_key) do
+    agent = Map.get(model.agents || %{}, agent_key)
+    provider = if agent, do: agent["provider"], else: "unknown"
+    models = Spark.ModelCatalog.models_for_provider(provider)
+
+    case Enum.at(models, model.selected_model_index || 0) do
+      %{id: model_id} ->
+        cmd = %{
+          function: fn _tui_pid -> Spark.AgentManager.pin_model(agent_key, model_id) end,
+          message: :pin_result
+        }
+
+        model = %{
+          model
+          | loading?: true,
+            status_message: "Pinning #{agent_key} model...",
+            error_message: nil
+        }
+
+        {model, cmd}
+
+      nil ->
+        model
+    end
   end
 
-  # --- Tick: periodic refresh from EventLog ---
+  # ── :tick handler ──
 
   defp handle(model, :tick) do
-    %{model | dashboard: Actions.dashboard_snapshot(), logs: Actions.load_logs()}
+    dashboard = Spark.TUI.Actions.dashboard_snapshot()
+
+    %{
+      model
+      | dashboard: dashboard,
+        task_statuses: Map.get(dashboard, :task_statuses, []),
+        logs: Spark.TUI.Actions.load_logs(),
+        spinner_frame: ((model.spinner_frame || 0) + 1) |> rem(8)
+    }
   end
 
-  # --- Logs screen: clear (c/C) ---
+  # ── Resize handler ──
 
-  defp handle(%{screen: :logs} = model, {:event, %{ch: ?c}}) do
-    Actions.clear_logs()
-    %{model | logs: [], status_message: "Logs cleared", error_message: nil}
+  defp handle(model, {:resized, width, height}) do
+    %{model | width: width, height: height}
   end
 
-  defp handle(%{screen: :logs} = model, {:event, %{ch: ?C}}) do
-    Actions.clear_logs()
-    %{model | logs: [], status_message: "Logs cleared", error_message: nil}
+  # Global scroll handler
+  defp handle(model, {:scroll, diff}) do
+    new_scroll = max(0, (model.scroll_top || 0) + diff)
+    %{model | scroll_top: new_scroll}
   end
 
-  # --- Catch-all: ignore unrecognized events ---
+  # ── Stream chunk handler ──
+
+  defp handle(model, {:stream_chunk, text}) do
+    current_len = byte_size(model.streaming_content || "")
+    new_model = %{model | streaming_content: (model.streaming_content || "") <> text}
+
+    Logger.debug(
+      "[SPARK] TUI streaming: #{current_len} -> #{byte_size(new_model.streaming_content)} bytes"
+    )
+
+    new_model
+  end
+
+  # ── Catch-all ──
 
   defp handle(model, _msg), do: model
 
-  # --- Helpers: Plan approval/rejection ---
+  # ── Helpers ──
+
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
+
+  defp trim_last(str) when is_binary(str),
+    do: String.slice(str, 0, max(String.length(str) - 1, 0))
+
+  defp trim_last(_), do: ""
 
   defp do_approve(%{active_plan: nil} = model) do
     %{model | error_message: "No active plan to approve", status_message: nil}
   end
 
   defp do_approve(%{active_plan: plan} = model) do
-    cmd = %{function: fn -> Actions.approve_plan(plan.id) end, message: :approve_result}
+    cmd = %{
+      function: fn _tui_pid -> Spark.TUI.Actions.approve_plan(plan.id) end,
+      message: :approve_result
+    }
+
     model = %{model | loading?: true, status_message: "Approving plan...", error_message: nil}
     {model, cmd}
   end
@@ -288,110 +443,228 @@ defmodule Spark.TUI.Update do
   end
 
   defp do_reject(%{active_plan: plan} = model) do
-    cmd = %{function: fn -> Actions.reject_plan(plan.id) end, message: :reject_result}
+    cmd = %{
+      function: fn _tui_pid -> Spark.TUI.Actions.reject_plan(plan.id) end,
+      message: :reject_result
+    }
+
     model = %{model | loading?: true, status_message: "Rejecting plan...", error_message: nil}
     {model, cmd}
   end
 
-  # --- Helpers: General ---
-
-  defp format_reason(reason) when is_binary(reason), do: reason
-  defp format_reason(reason), do: inspect(reason)
-
-  defp task_count(%{active_plan: %{tasks: tasks}}) when is_list(tasks), do: length(tasks)
-  defp task_count(_), do: 0
-
-  defp trim_last(str) when is_binary(str), do: String.slice(str, 0, max(String.length(str) - 1, 0))
-  defp trim_last(_), do: ""
-
-  defp open_agent_manager(model) do
-    model = refresh_runtime(model)
-    %{model | screen: :agent_manager, previous_screen: model.screen,
-      selected_index: 0, status_message: nil, error_message: nil}
-  end
-
-  defp open_dashboard(model) do
-    model = refresh_runtime(model)
-    %{model | screen: :dashboard, previous_screen: model.screen,
-      status_message: nil, error_message: nil}
-  end
-
-  defp open_logs(model) do
-    model = refresh_runtime(model)
-    %{model | screen: :logs, previous_screen: model.screen,
-      status_message: nil, error_message: nil}
-  end
-
-  defp refresh_current(model) do
-    model = refresh_runtime(model)
-    %{model | status_message: "Refreshed", error_message: nil}
-  end
-
-  defp open_model_picker(model, agent_key) do
-    configured = model.agents || %{}
-
-    if Map.has_key?(configured, agent_key) do
-      agent = Map.fetch!(configured, agent_key)
-      %{model |
-        screen: :model_picker,
-        previous_screen: :agent_manager,
-        selected_agent: agent_key,
-        selected_model_index: current_model_index(agent),
-        status_message: nil,
-        error_message: nil
-      }
-    else
-      %{model | status_message: "Agent '#{agent_key}' not found", error_message: nil}
-    end
-  end
-
-  defp pin_selected_model(model) do
-    agent_key = model.selected_agent
-    agent_cfg = Map.get(model.agents, agent_key, %{})
-    provider = agent_cfg["provider"] || ""
-    models = Spark.ModelCatalog.models_for_provider(provider)
-    selected = Enum.at(models, model.selected_model_index)
-
-    if selected == nil do
-      %{model | error_message: "No model selected", status_message: nil}
-    else
-      case Actions.safe(fn -> Spark.AgentManager.pin_model(agent_key, selected.id) end, {:error, "pin_model failed"}) do
-        {:ok, _agent} ->
-          model = refresh_runtime(model)
-          %{model |
-            screen: :agent_manager,
-            previous_screen: :model_picker,
-            status_message: "Pinned #{agent_key} to #{selected.id}",
-            error_message: nil
-          }
-
-        {:error, reason} ->
-          %{model | error_message: "Pin failed: #{reason}", status_message: nil}
-      end
-    end
-  end
-
-  defp ordered_agent_keys(model) do
-    configured = model.agents || %{}
-    preferred = model.agent_order || []
-    preferred_keys = Enum.filter(preferred, &Map.has_key?(configured, &1))
-    extra_keys = configured |> Map.keys() |> Kernel.--(preferred_keys) |> Enum.sort()
-    preferred_keys ++ extra_keys
-  end
-
-  defp selected_agent_key(model) do
-    ordered_agent_keys(model) |> Enum.at(model.selected_index)
-  end
-
-  defp current_model_index(agent) do
-    provider = agent["provider"] || ""
-    current = agent["model"] || ""
-    models = Spark.ModelCatalog.models_for_provider(provider)
-    idx = Enum.find_index(models, &(&1.id == current))
-    idx || 0
-  end
-
   defp refresh_runtime(model) do
-    %{model | agents: Actions.load_agents(), dashboard: Actions.dashboard_snapshot(), logs: Actions.load_logs()}
+    %{
+      model
+      | agents: Spark.TUI.Actions.load_agents(),
+        dashboard: Spark.TUI.Actions.dashboard_snapshot(),
+        logs: Spark.TUI.Actions.load_logs()
+    }
+  end
+
+  # ── Slash commands ──
+
+  defp handle_slash_command("/welcome", model),
+    do: %{model | view_mode: :welcome, input_buffer: "", command_mode: :chat, scroll_top: 0}
+
+  defp handle_slash_command("/home", model),
+    do: %{model | view_mode: :welcome, input_buffer: "", command_mode: :chat, scroll_top: 0}
+
+  defp handle_slash_command("/plan", %{active_plan: nil} = model),
+    do: %{model | error_message: "No active plan", input_buffer: ""}
+
+  defp handle_slash_command("/plan", model),
+    do: %{
+      model
+      | view_mode: :plan_review,
+        command_mode: :approve,
+        input_buffer: "",
+        scroll_top: 0
+    }
+
+  defp handle_slash_command("/exec", model),
+    do: %{model | view_mode: :execution, input_buffer: "", command_mode: :chat, scroll_top: 0}
+
+  defp handle_slash_command("/dash", model),
+    do: %{model | view_mode: :execution, input_buffer: "", command_mode: :chat, scroll_top: 0}
+
+  defp handle_slash_command("/dashboard", model),
+    do: %{model | view_mode: :execution, input_buffer: "", command_mode: :chat, scroll_top: 0}
+
+  defp handle_slash_command("/logs", model),
+    do: %{model | view_mode: :logs, input_buffer: "", command_mode: :chat, scroll_top: 0}
+
+  defp handle_slash_command("/agents", model),
+    do: %{
+      model
+      | command_mode: :agent_picker,
+        input_buffer: "",
+        selected_agent: nil,
+        selected_index: 0,
+        selected_model_index: 0
+    }
+
+  defp handle_slash_command("/help", model),
+    do: %{model | view_mode: :help, input_buffer: "", scroll_top: 0}
+
+  defp handle_slash_command("/quit", _model), do: {:quit, nil}
+  defp handle_slash_command("/exit", _model), do: {:quit, nil}
+
+  defp handle_slash_command("/clear", model),
+    do: %{model | input_buffer: "", error_message: nil, status_message: nil}
+
+  defp handle_slash_command("/approve", %{active_plan: nil} = model),
+    do: %{model | error_message: "No active plan", input_buffer: ""}
+
+  defp handle_slash_command("/approve", model), do: do_approve(%{model | input_buffer: ""})
+
+  defp handle_slash_command("/reject", %{active_plan: nil} = model),
+    do: %{model | error_message: "No active plan", input_buffer: ""}
+
+  defp handle_slash_command("/reject", model), do: do_reject(%{model | input_buffer: ""})
+
+  # /tasks — show task list view
+  defp handle_slash_command("/tasks", %{active_plan: nil} = model),
+    do: %{model | error_message: "No active plan. Start one with a goal.", input_buffer: ""}
+
+  defp handle_slash_command("/tasks", model),
+    do: %{model | view_mode: :tasks, input_buffer: "", command_mode: :chat, scroll_top: 0}
+
+  # /reload variants — hot reload (ported from CLI)
+  defp handle_slash_command("/reload", model), do: do_reload_all(model)
+  defp handle_slash_command("/reload all", model), do: do_reload_all(model)
+  defp handle_slash_command("/reload prompts", model), do: do_reload(:prompts, model)
+  defp handle_slash_command("/reload tools", model), do: do_reload(:tools, model)
+  defp handle_slash_command("/reload config", model), do: do_reload(:config, model)
+  defp handle_slash_command("/reload policy", model), do: do_reload(:policy, model)
+  defp handle_slash_command("/reload guidance", model), do: do_reload(:guidance, model)
+  defp handle_slash_command("/reload status", model), do: do_reload_status(model)
+
+  defp handle_slash_command(cmd, model),
+    do: %{model | error_message: "Unknown command: #{cmd}. Try /help", input_buffer: ""}
+
+  # ── Shell command handling (ported from CLI) ───────────────────────
+
+  defp handle_shell_input(input, model) do
+    cmd = String.slice(input, 1..-1//1)
+
+    if String.trim(cmd) == "" do
+      %{model | error_message: "Usage: !<shell command>", input_buffer: ""}
+    else
+      {output, exit_code} = Spark.TUI.Actions.run_shell_command(cmd)
+
+      lines =
+        output
+        |> String.split("\n", trim: true)
+        # cap to avoid overwhelming the canvas
+        |> Enum.take(50)
+
+      header =
+        if exit_code == 0, do: "  💻 Shell: #{cmd}", else: "  ❌ Shell (exit #{exit_code}): #{cmd}"
+
+      canvas = [header, ""] ++ lines ++ ["", "  Press /welcome to return"]
+
+      %{
+        model
+        | view_mode: :shell_output,
+          canvas_lines: canvas,
+          input_buffer: "",
+          command_mode: :chat
+      }
+    end
+  end
+
+  # ── Reload helpers (ported from CLI) ─────────────────────────────
+
+  @reload_targets [:prompts, :tools, :config, :policy, :guidance]
+
+  defp do_reload(type, model) do
+    case Spark.TUI.Actions.reload_component(type) do
+      {:ok, %{status: :success}} ->
+        %{model | status_message: "✅ Reloaded #{type}", error_message: nil, input_buffer: ""}
+
+      {:ok, %{status: :failed, error: err}} ->
+        %{
+          model
+          | error_message: "❌ Reload #{type} failed: #{inspect(err)}",
+            status_message: nil,
+            input_buffer: ""
+        }
+
+      {:error, reason} ->
+        %{
+          model
+          | error_message: "❌ Reload #{type} error: #{format_reason(reason)}",
+            status_message: nil,
+            input_buffer: ""
+        }
+    end
+  end
+
+  defp do_reload_all(model) do
+    results = for type <- @reload_targets, do: {type, Spark.TUI.Actions.reload_component(type)}
+
+    lines =
+      Enum.map(results, fn
+        {t, {:ok, %{status: :success}}} -> "  ✅ #{t}: OK"
+        {t, {:ok, %{status: :failed, error: err}}} -> "  ❌ #{t}: FAILED — #{inspect(err)}"
+        {t, {:error, reason}} -> "  ❌ #{t}: #{format_reason(reason)}"
+      end)
+
+    canvas = ["", "  🔄 Reload All Results", ""] ++ lines ++ ["", "  Press /welcome to return"]
+
+    %{
+      model
+      | view_mode: :shell_output,
+        canvas_lines: canvas,
+        input_buffer: "",
+        command_mode: :chat
+    }
+  end
+
+  defp do_reload_status(model) do
+    status = Spark.TUI.Actions.reload_status()
+    entries = Spark.TUI.Actions.reload_manifest_entries()
+
+    lines =
+      if status == nil do
+        ["  Coordinator not available"]
+      else
+        base = ["  Status: #{status.status} | Reload count: #{status.reload_count}"]
+
+        last =
+          if lr = status.last_reload do
+            ["  Last: #{lr.type} — #{lr.status}"] ++
+              if lr.error, do: ["  Error: #{inspect(lr.error)}"], else: []
+          else
+            ["  Last: —"]
+          end
+
+        entry_lines =
+          Enum.map(entries, fn e -> "  #{e.component}:#{e.name} — v#{e.version} (#{e.status})" end)
+
+        base ++ last ++ entry_lines
+      end
+
+    canvas = ["", "  🔄 Reload Status", ""] ++ lines ++ ["", "  Press /welcome to return"]
+
+    %{
+      model
+      | view_mode: :shell_output,
+        canvas_lines: canvas,
+        input_buffer: "",
+        command_mode: :chat
+    }
+  end
+
+  defp ordered_agents(model) do
+    configured = model.agents || %{}
+    preferred = model.agent_order || ["planning", "coding"]
+
+    pref =
+      Enum.filter(preferred, &Map.has_key?(configured, &1))
+      |> Enum.map(fn k -> {k, Map.fetch!(configured, k)} end)
+
+    extra = Map.drop(configured, preferred) |> Enum.sort_by(fn {k, _} -> k end)
+    pref ++ extra
   end
 end

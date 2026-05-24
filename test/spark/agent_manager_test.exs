@@ -6,9 +6,11 @@ defmodule Spark.AgentManagerTest do
     Spark.Config.put(["agents"], %{})
     # Start AgentManager for each test
     {:ok, pid} = Spark.AgentManager.start_link(name: Spark.AgentManager)
-    on_exit(fn -> 
-      Process.exit(pid, :normal) 
+
+    on_exit(fn ->
+      Process.exit(pid, :normal)
     end)
+
     :ok
   end
 

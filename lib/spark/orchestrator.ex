@@ -16,87 +16,119 @@ defmodule Spark.Orchestrator do
   require Logger
 
   alias Spark.State
-  alias Spark.Types.{Plan, Task, WorkerResult}
+  alias Spark.Types.{Plan, Task, TaskRequest, WorkerResult}
   alias Spark.LLM.{Cache, Client}
   alias Spark.EventBus
+  alias Spark.Orchestrator.Checkpoint
+  alias Spark.AgentProtocol
 
   @llm_call_timeout_ms 300_000
   @quick_call_timeout_ms 30_000
 
   @orchestrator_prompt """
-  You are Spark's planning orchestrator.
+  You are Spark's Planning Agent (Orchestrator), emulating the "Code Puppy" deep-investigation planning methodology.
+  Your job is to investigate, analyze, and architect a comprehensive implementation plan for the user's request.
 
-  Your job is to convert the user's coding goal into a valid JSON execution plan.
+  ## CORE PHILOSOPHY & METHODOLOGY:
 
-  CRITICAL OUTPUT RULES:
-  - Return ONLY valid JSON.
-  - Do NOT include markdown fences.
-  - Do NOT include prose before or after the JSON.
-  - The top-level JSON object MUST contain: "user_goal", "summary", "tasks".
-  - "tasks" MUST be a non-empty array.
-  - Each task MUST contain: "id", "title", "description", "risk", "read_paths", "write_paths", "depends_on".
-  - "risk" MUST be one of: "low", "medium", "high".
-  - "read_paths", "write_paths", and "depends_on" MUST be arrays.
-  - Use stable task IDs like "task_1", "task_2".
-  - Dependencies must reference earlier task IDs only.
+  1. READ-ONLY INVESTIGATION (THE SNIFFING PHASE):
+     - You are strictly a planning and investigation agent. You are FORBIDDEN from writing, editing, or deleting files. You do not write code.
+     - You only analyze directories, read files, search the codebase, and run read-only shell commands.
+     - Look around the repository like a loyal sniffing dog. Find all active configuration files, existing patterns, and architecture.
 
-  JSON schema example:
+  2. DEEP CONTEXT GATHERING:
+     - Do not jump to conclusions or assume how things are done.
+     - Trace function calls, inspect modules, and read relevant files before proposing any architectural changes.
+     - Identify all upstream and downstream dependencies.
+
+  3. THE "HUGE PLAN" GENERATION:
+     - Once investigation is complete, you must generate a massive, exhaustive, step-by-step plan.
+     - The plan must be formatted beautifully in Markdown and placed in the "summary" field of the JSON payload.
+     - The plan must contain:
+       - **Analysis & Findings**: Brief summary of the project architecture and technology stack.
+       - **Technical Roadmap**: Detailed phase-by-phase steps.
+       - **Impact Area**: Specific file paths and functions to be modified or created.
+       - **Edge Cases & Risks**: Potential problems, error handling, and mitigation strategies.
+       - **Dependencies**: Any new libraries or files required.
+       - **Testing & Verification**: Specific commands (e.g. mix test, npm test) and criteria to verify success.
+       - **The Approval Gate**: You must end the plan summary with the exact phrase:
+         "Does this plan look good to you? Reply 'approve' to send this to the Coding Agent, or give me feedback to refine it."
+
+  4. THE APPROVAL GATE & HANDOFF:
+     - You must stop and wait for explicit user approval before the coding agent executes.
+     - Format the plan into a structured JSON payload containing "user_goal", "summary", and "tasks".
+     - The "tasks" list defines the structured items that will be passed to the Spark Dispatcher and executed by Coding Agent workers.
+
+  ## JSON OUTPUT SCHEMA FORMAT:
+
+  You MUST return a valid JSON object. You can wrap the JSON in a ````json ... ```` markdown fence.
+
+  JSON Structure:
   {
-    "user_goal": "Build a menu feature",
-    "summary": "Implement a menu feature with UI, logic, and tests.",
+    "user_goal": "String describing the goal",
+    "summary": "Massive Markdown string containing the Huge Plan as described above",
     "tasks": [
       {
         "id": "task_1",
-        "title": "Inspect existing project structure",
-        "description": "Review relevant files and identify where the menu should be implemented.",
-        "risk": "low",
-        "read_paths": ["."],
-        "write_paths": [],
+        "title": "Concise task title",
+        "description": "Exhaustive description of what to do",
+        "risk": "low | medium | high",
+        "read_paths": ["list", "of", "file", "paths"],
+        "write_paths": ["list", "of", "file", "paths"],
         "depends_on": []
-      },
-      {
-        "id": "task_2",
-        "title": "Implement menu feature",
-        "description": "Add the menu feature in the appropriate files.",
-        "risk": "medium",
-        "read_paths": ["."],
-        "write_paths": [],
-        "depends_on": ["task_1"]
       }
     ]
   }
+
+  JSON SCHEMA RULES:
+  - "tasks" must be a non-empty array.
+  - Dependencies must only refer to earlier task IDs (e.g. task_1).
+  - Use stable task IDs like "task_1", "task_2".
   """
 
   # --- Public API ---
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc "Submit user input, triggers planning."
+  @spec run(String.t()) :: {:ok, Spark.Types.Plan.t()} | {:error, term()}
   def run(user_input),
     do: GenServer.call(__MODULE__, {:run, user_input}, @llm_call_timeout_ms)
 
+  @doc "Submit user input with streaming output forwarded to tui_pid."
+  @spec run_streaming(String.t(), pid()) :: {:ok, Spark.Types.Plan.t()} | {:error, term()}
+  def run_streaming(user_input, tui_pid),
+    do: GenServer.call(__MODULE__, {:run_streaming, user_input, tui_pid}, @llm_call_timeout_ms)
+
   @doc "Approve the active plan by plan_id."
+  @spec approve_plan(String.t()) :: {:ok, Spark.Types.Plan.t()} | {:error, term()}
   def approve_plan(plan_id),
     do: GenServer.call(__MODULE__, {:approve_plan, plan_id}, @quick_call_timeout_ms)
 
   @doc "Reject the active plan by plan_id."
+  @spec reject_plan(String.t(), String.t()) :: {:ok, Spark.Types.Plan.t()} | {:error, term()}
   def reject_plan(plan_id, reason \\ "user rejected"),
     do: GenServer.call(__MODULE__, {:reject_plan, plan_id, reason}, @quick_call_timeout_ms)
 
   @doc "Modify the active plan with a new instruction, triggers re-plan."
+  @spec modify_plan(String.t(), String.t()) :: {:ok, Spark.Types.Plan.t()} | {:error, term()}
   def modify_plan(plan_id, instruction),
     do: GenServer.call(__MODULE__, {:modify_plan, plan_id, instruction}, @llm_call_timeout_ms)
 
   @doc "Report a completed task result."
+  @spec task_completed(Spark.Types.WorkerResult.t()) :: :ok
   def task_completed(result), do: GenServer.cast(__MODULE__, {:task_completed, result})
 
   @doc "Report a failed task result."
+  @spec task_failed(Spark.Types.WorkerResult.t()) :: :ok
   def task_failed(result), do: GenServer.cast(__MODULE__, {:task_failed, result})
 
   @doc "Get current orchestrator state."
+  @spec get_state() :: Spark.State.t()
   def get_state, do: GenServer.call(__MODULE__, :get_state, @quick_call_timeout_ms)
 
   # --- GenServer Callbacks ---
@@ -104,58 +136,158 @@ defmodule Spark.Orchestrator do
   @impl true
   def init(opts) do
     state = State.new(Keyword.take(opts, [:session_id, :model, :prompt_version]))
-    prefix = build_cached_prefix(state.prompt_version || "1")
+
+    initial_version =
+      state.prompt_version ||
+        try do
+          Spark.Prompt.Store.version(:orchestrator)
+        rescue
+          _ -> "1"
+        catch
+          _, _ -> "1"
+        end
+
+    prefix = build_cached_prefix(initial_version)
     hash = Cache.prefix_hash(prefix)
-    state = %{state | cached_prefix: prefix, cached_prefix_hash: hash}
+
+    state = %{
+      state
+      | cached_prefix: prefix,
+        cached_prefix_hash: hash,
+        prompt_version: initial_version
+    }
+
+    # Attempt checkpoint restore for crash recovery
+    state = restore_checkpoint(state)
+
+    Logger.metadata(
+      session_id: state.session_id,
+      plan_id: nil,
+      phase: state.phase,
+      actor: :orchestrator
+    )
+
+    # Register in SessionRegistry for agent discovery (AgentProtocol)
+    AgentProtocol.register(:orchestrator, state.session_id)
+
+    # Schedule periodic checkpointing
+    Process.send_after(self(), :checkpoint, 30_000)
+
     EventBus.subscribe("spark:hot_reload")
     {:ok, state}
   end
 
-  # spark-anh.2: Planning flow
+  # spark-anh.2: Planning flow — async Task + GenServer.reply/2
   @impl true
-  def handle_call({:run, user_input}, _from, %State{phase: :awaiting_input} = state) do
+  def handle_call({:run, user_input}, from, %State{phase: :awaiting_input} = state) do
     state = %{state | phase: :planning}
     history_entry = %{role: "user", content: user_input}
-    state = %{state | history: state.history ++ [history_entry]}
+    state = %{state | history: state.history ++ [history_entry], pending_reply: from}
+    update_orch_metadata(state)
     messages = build_messages(state, user_input)
 
     Logger.info("Orchestrator: calling LLM for goal: #{String.slice(user_input, 0, 80)}")
 
-    case Client.complete(:orchestrator, messages, %{session_id: state.session_id}) do
-      {:ok, response} ->
-        Logger.info("Orchestrator: LLM response received, parsing plan")
-        case parse_plan(response, user_input) do
-          {:ok, plan} ->
-            case Plan.validate(plan) do
-              :ok ->
-                plan = Plan.awaiting_approval(plan)
-                state = %{state | phase: :awaiting_approval, active_plan: plan}
+    parent = self()
+    session_id = state.session_id
 
-                EventBus.publish_plan(plan.id, :plan_awaiting_approval, %{
-                  plan_id: plan.id,
-                  summary: plan.summary
-                })
+    Elixir.Task.start(fn ->
+      result =
+        Client.complete(:orchestrator, messages, %{
+          session_id: session_id,
+          mock_caller_pid: parent
+        })
 
-                {:reply, {:ok, plan}, state}
+      send(parent, {:llm_response, :run, from, result, user_input})
+    end)
 
-              {:error, errors} ->
-                state = %{state | phase: :awaiting_input}
-                {:reply, {:error, {:plan_validation, errors}}, state}
-            end
-
-          {:error, reason} ->
-            state = %{state | phase: :awaiting_input}
-            {:reply, {:error, {:plan_parse, reason}}, state}
-        end
-
-      {:error, reason} ->
-        Logger.error("Orchestrator: LLM call failed: #{inspect(reason)}")
-        state = %{state | phase: :awaiting_input}
-        {:reply, {:error, {:llm_error, reason}}, state}
-    end
+    {:noreply, state}
   end
 
   def handle_call({:run, _user_input}, _from, state) do
+    {:reply, {:error, {:invalid_phase, state.phase}}, state}
+  end
+
+  # Phase 3: Streaming LLM call
+  def handle_call(
+        {:run_streaming, user_input, tui_pid},
+        from,
+        %State{phase: :awaiting_input} = state
+      ) do
+    state = %{state | phase: :planning}
+    history_entry = %{role: "user", content: user_input}
+    state = %{state | history: state.history ++ [history_entry], pending_reply: from}
+    update_orch_metadata(state)
+    messages = build_messages(state, user_input)
+
+    Logger.info("Orchestrator: streaming LLM for goal: #{String.slice(user_input, 0, 80)}")
+
+    parent = self()
+    session_id = state.session_id
+
+    stream_callback = fn
+      {:chunk, %{delta: %{content: text}}} when is_binary(text) and text != "" ->
+        Logger.debug("Orchestrator stream: sending #{byte_size(text)} bytes to TUI")
+        send(tui_pid, {:stream_chunk, text})
+
+      {:done, {:ok, response}} ->
+        Logger.info("Orchestrator stream: done OK, forwarding to parent")
+        send(parent, {:llm_response, :run, from, {:ok, response}, user_input})
+
+      {:done, {:error, reason}} ->
+        Logger.warning("Orchestrator stream: done ERROR #{inspect(reason)}")
+        send(parent, {:llm_response, :run, from, {:error, reason}, user_input})
+
+      other ->
+        Logger.debug("Orchestrator stream: unexpected callback event #{inspect(other)}")
+        :ok
+    end
+
+    Elixir.Task.start(fn ->
+      Logger.info("Orchestrator stream: starting Client.stream for goal")
+
+      try do
+        result =
+          Client.stream(
+            :orchestrator,
+            messages,
+            %{session_id: session_id, mock_caller_pid: parent},
+            stream_callback
+          )
+
+        Logger.info("Orchestrator stream: Client.stream returned with #{inspect(result)}")
+
+        case result do
+          {:error, reason} ->
+            Logger.error("Orchestrator stream: Client.stream error: #{inspect(reason)}")
+            # Callback {:done, _} never fired, so we must notify the orchestrator
+            send(parent, {:llm_response, :run, from, {:error, reason}, user_input})
+
+          _ ->
+            :ok
+        end
+      rescue
+        e ->
+          Logger.error("Orchestrator stream: Client.stream crashed: #{Exception.message(e)}")
+
+          send(
+            parent,
+            {:llm_response, :run, from, {:error, {:stream_crash, Exception.message(e)}},
+             user_input}
+          )
+      catch
+        :exit, reason ->
+          Logger.error("Orchestrator stream: Client.stream exit: #{inspect(reason)}")
+          send(parent, {:llm_response, :run, from, {:error, {:stream_exit, reason}}, user_input})
+      end
+
+      :ok
+    end)
+
+    {:noreply, state}
+  end
+
+  def handle_call({:run_streaming, _user_input, _tui_pid}, _from, state) do
     {:reply, {:error, {:invalid_phase, state.phase}}, state}
   end
 
@@ -167,7 +299,30 @@ defmodule Spark.Orchestrator do
         case Plan.approve(plan) do
           {:ok, approved} ->
             state = %{state | phase: :executing, active_plan: approved}
-            :ok = Spark.Dispatcher.enqueue(plan_id, approved.tasks)
+            update_orch_metadata(state)
+            maybe_checkpoint(state)
+
+            # Agent Protocol: wrap each task into a TaskRequest envelope
+            # (formal contract — existing enqueue call still works, P2.8 migrates)
+            _task_requests =
+              for task <- approved.tasks do
+                TaskRequest.new(%{
+                  plan_id: plan_id,
+                  task_spec: %{
+                    id: task.id,
+                    title: task.title,
+                    description: task.description,
+                    risk: task.risk,
+                    read_paths: task.read_paths,
+                    write_paths: task.write_paths,
+                    depends_on: task.depends_on
+                  },
+                  context: %{session_id: state.session_id},
+                  timeout_ms: task.timeout_ms
+                })
+              end
+
+            :ok = Spark.Dispatcher.enqueue(plan_id, approved.tasks, session_id: state.session_id)
             EventBus.publish_plan(plan_id, :plan_approved, %{plan_id: plan_id})
             {:reply, {:ok, approved}, state}
 
@@ -189,11 +344,16 @@ defmodule Spark.Orchestrator do
 
   # spark-anh.3: Approval gate — reject
   @impl true
-  def handle_call({:reject_plan, plan_id, reason}, _from, %State{phase: :awaiting_approval} = state) do
+  def handle_call(
+        {:reject_plan, plan_id, reason},
+        _from,
+        %State{phase: :awaiting_approval} = state
+      ) do
     case state.active_plan do
       %Plan{id: ^plan_id, approval_status: :awaiting_approval} = plan ->
         {:ok, rejected} = Plan.reject(plan)
         state = %{state | phase: :awaiting_input, active_plan: nil}
+        update_orch_metadata(state)
         EventBus.publish_plan(plan_id, :plan_rejected, %{plan_id: plan_id, reason: reason})
         {:reply, {:ok, rejected}, state}
 
@@ -209,46 +369,42 @@ defmodule Spark.Orchestrator do
     {:reply, {:error, {:invalid_phase, state.phase}}, state}
   end
 
-  # spark-anh.3: Approval gate — modify
+  # spark-anh.3: Approval gate — modify (async Task + GenServer.reply/2)
   @impl true
-  def handle_call({:modify_plan, plan_id, instruction}, _from, %State{phase: :awaiting_approval} = state) do
+  def handle_call(
+        {:modify_plan, plan_id, instruction},
+        from,
+        %State{phase: :awaiting_approval} = state
+      ) do
     case state.active_plan do
       %Plan{id: ^plan_id} = plan ->
         modified = Plan.modify(plan, %{"modification_instruction" => instruction})
         mod_entry = %{role: "user", content: "Modify the plan: #{instruction}"}
-        state = %{state | history: state.history ++ [mod_entry], phase: :planning}
+
+        state = %{
+          state
+          | history: state.history ++ [mod_entry],
+            phase: :planning,
+            pending_reply: from
+        }
+
+        update_orch_metadata(state)
         messages = build_messages(state, "Modify the plan: #{instruction}")
 
-        case Client.complete(:orchestrator, messages, %{session_id: state.session_id}) do
-          {:ok, response} ->
-            case parse_plan(response, modified.user_goal) do
-              {:ok, new_plan} ->
-                case Plan.validate(new_plan) do
-                  :ok ->
-                    new_plan = Plan.awaiting_approval(new_plan)
-                    state = %{state | phase: :awaiting_approval, active_plan: new_plan}
+        parent = self()
+        session_id = state.session_id
 
-                    EventBus.publish_plan(new_plan.id, :plan_awaiting_approval, %{
-                      plan_id: new_plan.id,
-                      summary: new_plan.summary
-                    })
+        Elixir.Task.start(fn ->
+          result =
+            Client.complete(:orchestrator, messages, %{
+              session_id: session_id,
+              mock_caller_pid: parent
+            })
 
-                    {:reply, {:ok, new_plan}, state}
+          send(parent, {:llm_response, :modify_plan, from, result, modified})
+        end)
 
-                  {:error, errors} ->
-                    state = %{state | phase: :awaiting_approval, active_plan: modified}
-                    {:reply, {:error, {:plan_validation, errors}}, state}
-                end
-
-              {:error, reason} ->
-                state = %{state | phase: :awaiting_approval, active_plan: modified}
-                {:reply, {:error, {:plan_parse, reason}}, state}
-            end
-
-          {:error, reason} ->
-            state = %{state | phase: :awaiting_approval, active_plan: modified}
-            {:reply, {:error, {:llm_error, reason}}, state}
-        end
+        {:noreply, state}
 
       _ ->
         {:reply, {:error, :plan_id_mismatch}, state}
@@ -263,6 +419,8 @@ defmodule Spark.Orchestrator do
   def handle_call(:get_state, _from, state), do: {:reply, state, state}
 
   # spark-anh.4: Result reconciliation
+  # Agent Protocol: receiving side — Dispatcher casts these via
+  # AgentProtocol.report_completion/1 (formal contract in P2.8)
   @impl true
   def handle_cast({:task_completed, %WorkerResult{} = result}, %State{phase: :executing} = state) do
     state = State.add_result(state, result)
@@ -271,6 +429,7 @@ defmodule Spark.Orchestrator do
   end
 
   def handle_cast({:task_failed, %WorkerResult{} = result}, %State{phase: :executing} = state) do
+    # Agent Protocol: receiving side — see AgentProtocol.report_completion/1
     state = State.add_failed(state, result)
     state = maybe_transition_to_review(state)
     {:noreply, state}
@@ -279,7 +438,43 @@ defmodule Spark.Orchestrator do
   def handle_cast({:task_completed, _}, state), do: {:noreply, state}
   def handle_cast({:task_failed, _}, state), do: {:noreply, state}
 
-  # spark-anh.5: Final review — MUST be before catch-all handle_info
+  # spark-anh.2/3: LLM response handlers — receive Task results and reply via GenServer.reply/2
+  @impl true
+  def handle_info({:llm_response, :run, from, result, user_input}, state) do
+    case process_run_result(result, user_input, state) do
+      {:retry, new_state} ->
+        # Store from in metadata for the retry handler
+        {:noreply, %{new_state | metadata: Map.put(new_state.metadata, :pending_from, from)}}
+
+      {reply, new_state} ->
+        new_state = %{new_state | pending_reply: nil}
+        GenServer.reply(from, reply)
+        {:noreply, new_state}
+    end
+  end
+
+  def handle_info({:llm_response, :run_retry, result, user_input}, state) do
+    from = Map.get(state.metadata, :pending_from)
+    {reply, new_state} = process_run_result(result, user_input, state)
+
+    new_state = %{
+      new_state
+      | pending_reply: nil,
+        metadata: Map.delete(new_state.metadata, :pending_from)
+    }
+
+    if from, do: GenServer.reply(from, reply)
+    {:noreply, new_state}
+  end
+
+  def handle_info({:llm_response, :modify_plan, from, result, modified}, state) do
+    state = %{state | pending_reply: nil}
+    {reply, new_state} = process_modify_result(result, modified, state)
+    GenServer.reply(from, reply)
+    {:noreply, new_state}
+  end
+
+  # spark-anh.5: Final review — async Task for LLM call
   @impl true
   def handle_info(:do_final_review, %State{phase: :reviewing} = state) do
     results = State.all_results(state)
@@ -292,14 +487,34 @@ defmodule Spark.Orchestrator do
 
     review_messages = build_review_messages(state, results, plan)
 
-    case Client.complete(:orchestrator, review_messages, %{session_id: state.session_id}) do
+    parent = self()
+    session_id = state.session_id
+    plan_id = plan.id
+
+    Elixir.Task.start(fn ->
+      result =
+        Client.complete(:orchestrator, review_messages, %{
+          session_id: session_id,
+          mock_caller_pid: parent
+        })
+
+      send(parent, {:llm_response, :final_review, result, plan_id, session_id})
+    end)
+
+    {:noreply, state}
+  end
+
+  def handle_info({:llm_response, :final_review, result, plan_id, session_id}, state) do
+    case result do
       {:ok, response} ->
         review_content = extract_content(response)
         state = %{state | phase: :completed}
+        update_orch_metadata(state)
+        maybe_checkpoint(state)
 
-        EventBus.publish_plan(plan.id, :orchestrator_review_completed, %{
-          plan_id: plan.id,
-          session_id: state.session_id,
+        EventBus.publish_plan(plan_id, :orchestrator_review_completed, %{
+          plan_id: plan_id,
+          session_id: session_id,
           review: review_content
         })
 
@@ -308,10 +523,12 @@ defmodule Spark.Orchestrator do
       {:error, reason} ->
         Logger.error("Orchestrator: final review LLM error: #{inspect(reason)}")
         state = %{state | phase: :completed}
+        update_orch_metadata(state)
+        maybe_checkpoint(state)
 
-        EventBus.publish_plan(plan.id, :orchestrator_review_completed, %{
-          plan_id: plan.id,
-          session_id: state.session_id,
+        EventBus.publish_plan(plan_id, :orchestrator_review_completed, %{
+          plan_id: plan_id,
+          session_id: session_id,
           review: "Review failed: #{inspect(reason)}"
         })
 
@@ -323,21 +540,42 @@ defmodule Spark.Orchestrator do
   @impl true
   def handle_info(%Spark.Types.Event{type: :prompt_reloaded}, state) do
     Logger.info("Orchestrator: prompt reloaded, rebuilding cached prefix")
-    prefix = build_cached_prefix(state.prompt_version)
+
+    new_version =
+      try do
+        Spark.Prompt.Store.version(:orchestrator)
+      rescue
+        _ -> "v_#{:erlang.unique_integer([:positive])}"
+      catch
+        _, _ -> "v_#{:erlang.unique_integer([:positive])}"
+      end
+
+    prefix = build_cached_prefix(new_version)
     hash = Cache.prefix_hash(prefix)
-    new_version = "v_#{:erlang.unique_integer([:positive])}"
-    state = %{state | cached_prefix: prefix, cached_prefix_hash: hash, prompt_version: new_version}
+
+    state = %{
+      state
+      | cached_prefix: prefix,
+        cached_prefix_hash: hash,
+        prompt_version: new_version
+    }
+
     {:noreply, state}
   end
 
   # spark-anh.6: Hot reload — policy
-  def handle_info(%Spark.Types.Event{type: :policy_reloaded}, %State{phase: :awaiting_approval} = state) do
+  def handle_info(
+        %Spark.Types.Event{type: :policy_reloaded},
+        %State{phase: :awaiting_approval} = state
+      ) do
     Logger.info("Orchestrator: policy reloaded, revalidating draft plan")
 
     case state.active_plan do
       %Plan{} = plan ->
         case Plan.validate(plan) do
-          :ok -> {:noreply, state}
+          :ok ->
+            {:noreply, state}
+
           {:error, errors} ->
             Logger.warning("Orchestrator: plan invalidated by policy reload: #{inspect(errors)}")
             {:noreply, state}
@@ -365,6 +603,14 @@ defmodule Spark.Orchestrator do
     {:noreply, state}
   end
 
+  # Periodic state checkpointing
+  @impl true
+  def handle_info(:checkpoint, state) do
+    Checkpoint.save(state)
+    Process.send_after(self(), :checkpoint, 30_000)
+    {:noreply, state}
+  end
+
   # Catch-all for other EventBus events
   def handle_info(%Spark.Types.Event{type: type}, state) do
     Logger.debug("Orchestrator: ignoring event #{type}")
@@ -372,6 +618,125 @@ defmodule Spark.Orchestrator do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  # --- Private: LLM result processing ---
+
+  defp has_empty_tasks_error?(errors) do
+    Enum.any?(errors, fn
+      {:tasks, "must not be empty"} -> true
+      _ -> false
+    end)
+  end
+
+  defp process_run_result({:ok, response}, user_input, state) do
+    Logger.info("Orchestrator: LLM response received, parsing plan")
+
+    case parse_plan(response, user_input) do
+      {:ok, plan} ->
+        case Plan.validate(plan) do
+          :ok ->
+            plan = Plan.awaiting_approval(plan)
+            state = %{state | phase: :awaiting_approval, active_plan: plan}
+            update_orch_metadata(state)
+            maybe_checkpoint(state)
+
+            EventBus.publish_plan(plan.id, :plan_awaiting_approval, %{
+              plan_id: plan.id,
+              summary: plan.summary
+            })
+
+            {{:ok, plan}, state}
+
+          {:error, errors} ->
+            if has_empty_tasks_error?(errors) and
+                 not Map.get(state.metadata, :empty_tasks_retried, false) do
+              Logger.warning(
+                "Orchestrator: plan has empty tasks — retrying LLM call with schema reminder"
+              )
+
+              retry_state = %{
+                state
+                | metadata: Map.put(state.metadata, :empty_tasks_retried, true)
+              }
+
+              messages = build_messages(retry_state, user_input)
+
+              schema_reminder = %{
+                role: "system",
+                content:
+                  "CRITICAL: Your previous response was missing the required \"tasks\" array in the JSON output. The JSON MUST include a non-empty \"tasks\" array with at least one task object. Each task must have: id, title, description, risk (low|medium|high), read_paths (array of file paths), write_paths (array of file paths), depends_on (array of task IDs). See the JSON OUTPUT SCHEMA FORMAT in your system prompt. Return a complete JSON response with a non-empty tasks array NOW."
+              }
+
+              parent = self()
+              session_id = retry_state.session_id
+
+              Elixir.Task.start(fn ->
+                result =
+                  Client.complete(:orchestrator, [schema_reminder | messages], %{
+                    session_id: session_id,
+                    mock_caller_pid: parent
+                  })
+
+                send(parent, {:llm_response, :run_retry, result, user_input})
+              end)
+
+              {:retry, retry_state}
+            else
+              state = %{state | phase: :awaiting_input}
+              update_orch_metadata(state)
+              {{:error, {:plan_validation, errors}}, state}
+            end
+        end
+
+      {:error, reason} ->
+        state = %{state | phase: :awaiting_input}
+        update_orch_metadata(state)
+        {{:error, {:plan_parse, reason}}, state}
+    end
+  end
+
+  defp process_run_result({:error, reason}, _user_input, state) do
+    Logger.error("Orchestrator: LLM call failed: #{inspect(reason)}")
+    state = %{state | phase: :awaiting_input}
+    update_orch_metadata(state)
+    {{:error, {:llm_error, reason}}, state}
+  end
+
+  defp process_modify_result({:ok, response}, modified, state) do
+    case parse_plan(response, modified.user_goal) do
+      {:ok, new_plan} ->
+        case Plan.validate(new_plan) do
+          :ok ->
+            new_plan = Plan.awaiting_approval(new_plan)
+            state = %{state | phase: :awaiting_approval, active_plan: new_plan}
+            update_orch_metadata(state)
+            maybe_checkpoint(state)
+
+            EventBus.publish_plan(new_plan.id, :plan_awaiting_approval, %{
+              plan_id: new_plan.id,
+              summary: new_plan.summary
+            })
+
+            {{:ok, new_plan}, state}
+
+          {:error, errors} ->
+            state = %{state | phase: :awaiting_approval, active_plan: modified}
+            update_orch_metadata(state)
+            {{:error, {:plan_validation, errors}}, state}
+        end
+
+      {:error, reason} ->
+        state = %{state | phase: :awaiting_approval, active_plan: modified}
+        update_orch_metadata(state)
+        {{:error, {:plan_parse, reason}}, state}
+    end
+  end
+
+  defp process_modify_result({:error, reason}, modified, state) do
+    state = %{state | phase: :awaiting_approval, active_plan: modified}
+    update_orch_metadata(state)
+    {{:error, {:llm_error, reason}}, state}
+  end
 
   # --- Private: Planning ---
 
@@ -392,7 +757,16 @@ defmodule Spark.Orchestrator do
   end
 
   defp build_cached_prefix(_version) do
-    [%{role: "system", content: @orchestrator_prompt}]
+    prompt =
+      try do
+        Spark.Prompt.Store.get(:orchestrator)
+      rescue
+        _ -> @orchestrator_prompt
+      catch
+        _, _ -> @orchestrator_prompt
+      end
+
+    [%{role: "system", content: prompt}]
   end
 
   defp parse_plan(response, user_goal) do
@@ -428,14 +802,23 @@ defmodule Spark.Orchestrator do
     case Jason.decode(json_str) do
       {:ok, json} ->
         plan_id = json["id"] || generate_plan_id()
-        tasks = build_tasks(json, plan_id)
 
-        plan = Plan.new(%{
-          id: plan_id,
-          user_goal: json["user_goal"] || user_goal,
-          summary: json["summary"] || "Auto-generated plan",
-          tasks: tasks
-        })
+        # Normalize: some LLMs nest tasks under "plan" key
+        normalized = normalize_plan_json(json)
+        tasks = build_tasks(normalized, plan_id)
+
+        summary =
+          normalized["summary"] ||
+            json["plan"]["summary"] ||
+            "Auto-generated plan"
+
+        plan =
+          Plan.new(%{
+            id: plan_id,
+            user_goal: normalized["user_goal"] || json["goal"] || user_goal,
+            summary: summary,
+            tasks: tasks
+          })
 
         {:ok, plan}
 
@@ -444,30 +827,104 @@ defmodule Spark.Orchestrator do
     end
   end
 
+  # Handles different JSON schemas from various LLMs:
+  #   1. Direct: {"user_goal": ..., "tasks": [...]}
+  #   2. Nested: {"goal": ..., "plan": {"tasks": [...]}}
+  #   3. Flat: {"tasks": [...]}
+  defp normalize_plan_json(json) do
+    cond do
+      is_list(json["tasks"]) ->
+        json
+
+      is_map(json["plan"]) and is_list(json["plan"]["tasks"]) ->
+        # Flatten nested structure
+        nested = json["plan"]
+
+        Map.merge(json, %{
+          "tasks" => nested["tasks"],
+          "summary" => nested["summary"],
+          "user_goal" => json["user_goal"] || json["goal"]
+        })
+
+      true ->
+        json
+    end
+  end
+
   defp build_tasks(%{"tasks" => task_list}, plan_id) when is_list(task_list) do
+    if task_list == [] do
+      Logger.warning("Orchestrator: LLM returned plan JSON with empty \"tasks\" array")
+    end
+
     Enum.map(task_list, fn t ->
+      # Normalize: some LLMs use "instruction" or "description" field
+      description = t["description"] || t["instruction"] || t["action"] || ""
+      title = t["title"] || t["agent"] || infer_title(description) || "Untitled task"
+
       Task.new(%{
-        id: t["id"],
-        title: t["title"] || "Untitled task",
-        description: t["description"] || "",
+        id: t["id"] || generate_task_id(),
+        title: title,
+        description: description,
         plan_id: t["plan_id"] || plan_id,
         risk: parse_risk(t["risk"]),
-        write_paths: t["write_paths"] || [],
-        read_paths: t["read_paths"] || [],
+        write_paths: t["write_paths"] || infer_paths(description, :write),
+        read_paths: t["read_paths"] || infer_paths(description, :read),
         depends_on: t["depends_on"] || []
       })
     end)
   end
 
-  defp build_tasks(_, _plan_id), do: []
+  defp build_tasks(_, _plan_id) do
+    Logger.warning(
+      "Orchestrator: LLM returned plan JSON without \"tasks\" key or with non-list tasks — falling back to empty list"
+    )
+
+    []
+  end
 
   defp generate_plan_id do
     "plan_" <> (:crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false))
   end
 
+  defp generate_task_id do
+    "task_" <> (:crypto.strong_rand_bytes(4) |> Base.url_encode64(padding: false))
+  end
+
   defp parse_risk("low"), do: :low
   defp parse_risk("high"), do: :high
   defp parse_risk(_), do: :medium
+
+  # Infer a title from the first line of the description
+  defp infer_title(description) when is_binary(description) and byte_size(description) > 0 do
+    description
+    |> String.split(~r/\n/, parts: 2)
+    |> hd()
+    |> String.slice(0, 60)
+    |> String.trim()
+  end
+
+  defp infer_title(_), do: nil
+
+  # Infer file paths from the description text (e.g. "Create hello.ex")
+  defp infer_paths(description, :write) when is_binary(description) do
+    Regex.scan(
+      ~r/(?:create|write|modify|edit)\s+([\w.\/-]+\.(?:ex|exs|erl|json|yaml|yml|md|txt|toml|cfg|conf))/i,
+      description
+    )
+    |> Enum.map(&List.first/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp infer_paths(description, :read) when is_binary(description) do
+    Regex.scan(
+      ~r/(?:read|inspect|analyze|check)\s+([\w.\/-]+\.(?:ex|exs|erl|json|yaml|yml|md|txt|toml|cfg|conf))/i,
+      description
+    )
+    |> Enum.map(&List.first/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp infer_paths(_, _), do: []
 
   # --- Private: Result reconciliation ---
 
@@ -484,6 +941,8 @@ defmodule Spark.Orchestrator do
 
     if MapSet.subset?(all_ids, done_ids) do
       state = %{state | phase: :reviewing}
+      update_orch_metadata(state)
+      maybe_checkpoint(state)
       send(self(), :do_final_review)
       state
     else
@@ -511,7 +970,11 @@ defmodule Spark.Orchestrator do
       static_prefix: state.cached_prefix,
       session_history: format_history(state.history),
       worker_result: [
-        %{role: "system", content: "Review the following task results:\n#{Jason.encode!(review_payload, pretty: true)}"}
+        %{
+          role: "system",
+          content:
+            "Review the following task results:\n#{Jason.encode!(review_payload, pretty: true)}"
+        }
       ]
     ]
 
@@ -521,4 +984,54 @@ defmodule Spark.Orchestrator do
   # --- Private: State migration ---
 
   defp migrate_state(state, _payload), do: state
+
+  # --- Private: Checkpointing ---
+
+  @checkpoint_phases [:awaiting_approval, :executing, :reviewing, :completed]
+
+  defp maybe_checkpoint(%State{phase: phase} = state) when phase in @checkpoint_phases do
+    Checkpoint.save(state)
+  end
+
+  defp maybe_checkpoint(_state), do: :ok
+
+  defp update_orch_metadata(state) do
+    Logger.metadata(
+      session_id: state.session_id,
+      plan_id: if(state.active_plan, do: state.active_plan.id, else: nil),
+      phase: state.phase,
+      actor: :orchestrator
+    )
+  end
+
+  defp restore_checkpoint(%State{session_id: session_id} = state) do
+    case Checkpoint.restore(session_id) do
+      {:ok, cp} ->
+        Logger.info(
+          "Orchestrator: restored checkpoint for session #{session_id} (phase: #{cp.phase})"
+        )
+
+        state = %{
+          state
+          | phase: cp.phase,
+            active_plan: cp.active_plan,
+            completed_results: cp.completed_results,
+            failed_results: cp.failed_results
+        }
+
+        update_orch_metadata(state)
+        state
+
+      :no_checkpoint ->
+        state
+
+      {:error, :stale_checkpoint} ->
+        Logger.info("Orchestrator: stale checkpoint for session #{session_id}, starting fresh")
+        state
+
+      {:error, reason} ->
+        Logger.warning("Orchestrator: checkpoint restore failed: #{inspect(reason)}")
+        state
+    end
+  end
 end

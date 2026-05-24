@@ -33,7 +33,9 @@ defmodule Spark.Tools.WebFetch do
 
   @impl true
   def execute(%{url: url}, context) when is_binary(url) do
-    timeout = Map.get(context, :timeout_ms, Map.get(context, :web_timeout_ms, @default_timeout_ms))
+    timeout =
+      Map.get(context, :timeout_ms, Map.get(context, :web_timeout_ms, @default_timeout_ms))
+
     max = Map.get(context, :max_output_bytes, @max_output_bytes)
 
     try do
@@ -62,13 +64,14 @@ defmodule Spark.Tools.WebFetch do
 
       truncated = maybe_truncate(text, max)
 
-      {:ok, %{
-        url: url,
-        status: status,
-        title: title,
-        text: truncated,
-        truncated: byte_size(text) > max
-      }}
+      {:ok,
+       %{
+         url: url,
+         status: status,
+         title: title,
+         text: truncated,
+         truncated: byte_size(text) > max
+       }}
     rescue
       e ->
         {:error, %{url: url, reason: :fetch_error, message: Exception.message(e)}}
@@ -102,7 +105,8 @@ defmodule Spark.Tools.WebSearch do
   def name, do: "web_search"
 
   @impl true
-  def description, do: "Search the web for information. Currently a placeholder — returns a structured note."
+  def description,
+    do: "Search the web for information. Currently a placeholder — returns a structured note."
 
   @impl true
   def schema do
@@ -120,12 +124,15 @@ defmodule Spark.Tools.WebSearch do
 
   @impl true
   def execute(%{query: query}, _context) when is_binary(query) do
-    {:ok, %{
-      query: query,
-      status: :placeholder,
-      note: "Web search is not yet available. Integrate a search API provider to enable real results.",
-      suggestion: "Use web_fetch to retrieve specific URLs, or implement a search provider (e.g., SearXNG, Brave, Google)."
-    }}
+    {:ok,
+     %{
+       query: query,
+       status: :placeholder,
+       note:
+         "Web search is not yet available. Integrate a search API provider to enable real results.",
+       suggestion:
+         "Use web_fetch to retrieve specific URLs, or implement a search provider (e.g., SearXNG, Brave, Google)."
+     }}
   end
 
   def execute(_args, _context) do

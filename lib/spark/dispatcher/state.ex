@@ -6,19 +6,19 @@ defmodule Spark.Dispatcher.State do
   """
 
   alias Spark.Types.Task
+  require Logger
 
-  defstruct [
-    queue: :queue.new(),
-    active_workers: %{},
-    completed_tasks: MapSet.new(),
-    failed_tasks: %{},
-    max_concurrency: 3,
-    paused?: false,
-    session_id: nil,
-    plan_id: nil,
-    worker_module: Spark.FakeWorker,
-    schema_version: 1
-  ]
+  defstruct queue: :queue.new(),
+            active_workers: %{},
+            completed_tasks: MapSet.new(),
+            failed_tasks: %{},
+            heartbeats: %{},
+            max_concurrency: 3,
+            paused?: false,
+            session_id: nil,
+            plan_id: nil,
+            worker_module: Spark.Worker,
+            schema_version: 1
 
   @type t :: %__MODULE__{}
 
@@ -29,11 +29,33 @@ defmodule Spark.Dispatcher.State do
       Keyword.get(opts, :max_concurrency, nil) ||
         Spark.Config.get([:dispatcher, :max_concurrency], 3)
 
+    worker_module =
+      Keyword.get(opts, :worker_module) ||
+        case Spark.Config.get([:dispatcher, :worker_module], "Spark.Worker") do
+          mod when is_binary(mod) ->
+            try do
+              String.to_existing_atom(mod)
+            rescue
+              ArgumentError ->
+                Logger.warning(
+                  "Worker module #{inspect(mod)} from config not found in atom table; falling back to Spark.Worker"
+                )
+
+                Spark.Worker
+            end
+
+          mod when is_atom(mod) ->
+            mod
+
+          _ ->
+            Spark.Worker
+        end
+
     %__MODULE__{
       max_concurrency: max_concurrency,
       session_id: Keyword.get(opts, :session_id),
       plan_id: Keyword.get(opts, :plan_id),
-      worker_module: Keyword.get(opts, :worker_module, Spark.FakeWorker)
+      worker_module: worker_module
     }
   end
 
@@ -42,7 +64,10 @@ defmodule Spark.Dispatcher.State do
   def enqueue(state, tasks) when is_list(tasks) do
     {valid, invalid} =
       Enum.split_with(tasks, fn task ->
-        case Task.validate(task) do :ok -> true; {:error, _} -> false end
+        case Task.validate(task) do
+          :ok -> true
+          {:error, _} -> false
+        end
       end)
 
     new_queue = Enum.reduce(valid, state.queue, &:queue.in(&1, &2))
@@ -74,11 +99,13 @@ defmodule Spark.Dispatcher.State do
   defp next_ready_task(state, already_selected) do
     completed_ids = completed_and_selected_ids(state, already_selected)
     active_writes = active_write_paths(state)
+    selected_writes = Enum.flat_map(already_selected, & &1.write_paths)
+    all_blocked_writes = active_writes ++ selected_writes
     items = :queue.to_list(state.queue)
 
     Enum.find(items, fn task ->
       Task.ready?(task, completed_ids) and
-        not has_write_conflict?(task, active_writes)
+        not has_write_conflict?(task, all_blocked_writes)
     end)
   end
 
@@ -131,19 +158,48 @@ defmodule Spark.Dispatcher.State do
 
   @doc "Adds a worker to the active map. worker_info: %{pid, monitor_ref, worker_id, started_at, task}"
   @spec add_active(t(), String.t(), map()) :: t()
-  def add_active(state, task_id, worker_info), do: %{state | active_workers: Map.put(state.active_workers, task_id, worker_info)}
+  def add_active(state, task_id, worker_info),
+    do: %{state | active_workers: Map.put(state.active_workers, task_id, worker_info)}
 
-  @doc "Removes a worker from the active map."
+  @doc "Removes a worker from the active map and clears its heartbeat."
   @spec remove_active(t(), String.t()) :: t()
-  def remove_active(state, task_id), do: %{state | active_workers: Map.delete(state.active_workers, task_id)}
+  def remove_active(state, task_id) do
+    %{
+      state
+      | active_workers: Map.delete(state.active_workers, task_id),
+        heartbeats: Map.delete(state.heartbeats, task_id)
+    }
+  end
+
+  @doc "Records a heartbeat timestamp for a task."
+  @spec record_heartbeat(t(), String.t()) :: t()
+  def record_heartbeat(state, task_id),
+    do: %{state | heartbeats: Map.put(state.heartbeats, task_id, DateTime.utc_now())}
+
+  @doc "Returns task_ids of active workers whose last heartbeat is older than the given threshold (seconds)."
+  @spec stale_heartbeats(t(), pos_integer()) :: [String.t()]
+  def stale_heartbeats(state, threshold_seconds) do
+    cutoff = DateTime.utc_now() |> DateTime.add(-threshold_seconds, :second)
+
+    state.active_workers
+    |> Map.keys()
+    |> Enum.filter(fn task_id ->
+      case Map.get(state.heartbeats, task_id) do
+        nil -> true
+        last_hb -> DateTime.compare(last_hb, cutoff) == :lt
+      end
+    end)
+  end
 
   @doc "Marks a task as completed."
   @spec mark_completed(t(), String.t()) :: t()
-  def mark_completed(state, task_id), do: %{state | completed_tasks: MapSet.put(state.completed_tasks, task_id)}
+  def mark_completed(state, task_id),
+    do: %{state | completed_tasks: MapSet.put(state.completed_tasks, task_id)}
 
   @doc "Marks a task as failed with failure info."
   @spec mark_failed(t(), String.t(), map()) :: t()
-  def mark_failed(state, task_id, failure_info), do: %{state | failed_tasks: Map.put(state.failed_tasks, task_id, failure_info)}
+  def mark_failed(state, task_id, failure_info),
+    do: %{state | failed_tasks: Map.put(state.failed_tasks, task_id, failure_info)}
 
   @doc "Pauses the dispatcher."
   @spec pause(t()) :: t()
@@ -168,9 +224,68 @@ defmodule Spark.Dispatcher.State do
       completed_count: MapSet.size(state.completed_tasks),
       failed_count: map_size(state.failed_tasks),
       can_spawn?: can_spawn?(state),
+      worker_module: state.worker_module,
       session_id: state.session_id,
       plan_id: state.plan_id
     }
+  end
+
+  @doc """
+  Returns a list of per-task status maps for all known tasks.
+
+  Each entry: %{task_id: "...", title: "...", status: :queued|:running|:completed|:failed}
+  Enumerates running (active_workers), queued (queue), completed, and failed tasks.
+  """
+  @spec task_statuses(t()) :: [map()]
+  def task_statuses(state) do
+    running =
+      state.active_workers
+      |> Map.values()
+      |> Enum.map(fn %{task: task, started_at: started_at} ->
+        elapsed =
+          if started_at,
+            do: DateTime.diff(DateTime.utc_now(), started_at, :millisecond),
+            else: nil
+
+        %{task_id: task.id, title: task.title, status: :running, elapsed_ms: elapsed}
+      end)
+
+    queued =
+      :queue.to_list(state.queue)
+      |> Enum.map(fn task ->
+        %{task_id: task.id, title: task.title, status: :queued}
+      end)
+
+    completed =
+      state.completed_tasks
+      |> MapSet.to_list()
+      |> Enum.map(fn task_id ->
+        %{task_id: task_id, title: task_title_for(state, task_id), status: :completed}
+      end)
+
+    failed =
+      state.failed_tasks
+      |> Map.keys()
+      |> Enum.map(fn task_id ->
+        %{task_id: task_id, title: task_title_for(state, task_id), status: :failed}
+      end)
+
+    running ++ queued ++ completed ++ failed
+  end
+
+  defp task_title_for(state, task_id) do
+    case Map.get(state.active_workers, task_id) do
+      %{task: task} ->
+        task.title
+
+      nil ->
+        :queue.to_list(state.queue)
+        |> Enum.find(&(&1.id == task_id))
+        |> case do
+          nil -> task_id
+          task -> task.title
+        end
+    end
   end
 
   @doc "Updates config. Validates and rejects invalid values."
@@ -178,9 +293,28 @@ defmodule Spark.Dispatcher.State do
   def update_config(state, config) when is_map(config) do
     state
     |> maybe_update_int(:max_concurrency, Map.get(config, "max_concurrency"))
+    |> maybe_update_module(:worker_module, Map.get(config, "worker_module"))
   end
 
   defp maybe_update_int(state, _key, nil), do: state
   defp maybe_update_int(state, key, n) when is_integer(n) and n > 0, do: Map.put(state, key, n)
   defp maybe_update_int(state, _key, _), do: state
+
+  defp maybe_update_module(state, _key, nil), do: state
+  defp maybe_update_module(state, key, mod) when is_atom(mod), do: Map.put(state, key, mod)
+
+  defp maybe_update_module(state, key, mod) when is_binary(mod) do
+    try do
+      Map.put(state, key, String.to_existing_atom(mod))
+    rescue
+      ArgumentError ->
+        Logger.warning(
+          "Worker module #{inspect(mod)} not found in atom table; keeping #{inspect(Map.get(state, key))}"
+        )
+
+        state
+    end
+  end
+
+  defp maybe_update_module(state, _key, _), do: state
 end

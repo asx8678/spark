@@ -39,6 +39,11 @@ defmodule Spark.EventsTest do
       import Spark.Events
       assert worker_started() == :worker_started
       assert worker_stopped() == :worker_stopped
+      assert worker_iteration_started() == :worker_iteration_started
+      assert worker_llm_started() == :worker_llm_started
+      assert worker_llm_completed() == :worker_llm_completed
+      assert worker_llm_failed() == :worker_llm_failed
+      assert worker_llm_timeout() == :worker_llm_timeout
     end
 
     test "tool events expand to correct atoms" do
@@ -81,8 +86,8 @@ defmodule Spark.EventsTest do
       assert :hot_reload_started in all
       assert :memory_written in all
       assert :policy_reloaded in all
-    assert :code_reloaded in all
-    assert length(all) == 27
+      assert :code_reloaded in all
+      assert length(all) == 32
     end
   end
 
@@ -152,12 +157,13 @@ defmodule Spark.EventsTest do
     end
 
     test "normalizes map with type and payload" do
-      assert {:ok, event} = EventBus.normalize(%{
-        type: :task_started,
-        payload: %{task_id: "t1"},
-        topic: "spark:task:t1",
-        source: :dispatcher
-      })
+      assert {:ok, event} =
+               EventBus.normalize(%{
+                 type: :task_started,
+                 payload: %{task_id: "t1"},
+                 topic: "spark:task:t1",
+                 source: :dispatcher
+               })
 
       assert %Event{} = event
       assert event.type == :task_started
@@ -174,9 +180,11 @@ defmodule Spark.EventsTest do
     end
 
     test "normalizes 3-tuple with opts" do
-      assert {:ok, event} = EventBus.normalize(
-        {:task_failed, %{error: "bad"}, [source: :worker, topic: "spark:events"]}
-      )
+      assert {:ok, event} =
+               EventBus.normalize(
+                 {:task_failed, %{error: "bad"}, [source: :worker, topic: "spark:events"]}
+               )
+
       assert %Event{} = event
       assert event.type == :task_failed
       assert event.source == :worker
@@ -201,11 +209,12 @@ defmodule Spark.EventsTest do
     test "broadcasts a raw map after normalization" do
       EventBus.subscribe("spark:events")
 
-      assert :ok = EventBus.broadcast("spark:events", %{
-        type: :session_started,
-        payload: %{session_id: "s1"},
-        topic: "spark:events"
-      })
+      assert :ok =
+               EventBus.broadcast("spark:events", %{
+                 type: :session_started,
+                 payload: %{session_id: "s1"},
+                 topic: "spark:events"
+               })
 
       assert_receive %Event{type: :session_started}, 500
     after

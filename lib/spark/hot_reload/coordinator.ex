@@ -34,6 +34,7 @@ defmodule Spark.HotReload.Coordinator do
   @doc """
   Starts the Coordinator GenServer.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
@@ -44,6 +45,7 @@ defmodule Spark.HotReload.Coordinator do
 
   Types: `:prompts`, `:tools`, `:config`, `:policy`, `:guidance`
   """
+  @spec reload(atom()) :: {:ok, reload_result()} | {:error, term()}
   def reload(type) when type in [:prompts, :tools, :config, :policy, :guidance] do
     GenServer.call(__MODULE__, {:reload_type, type}, 30_000)
   end
@@ -51,6 +53,7 @@ defmodule Spark.HotReload.Coordinator do
   @doc """
   Reloads a specific file, auto-detecting the component type from the path.
   """
+  @spec reload_file(String.t()) :: {:ok, reload_result()} | {:error, term()}
   def reload_file(path) when is_binary(path) do
     GenServer.call(__MODULE__, {:reload_file, path}, 30_000)
   end
@@ -58,6 +61,7 @@ defmodule Spark.HotReload.Coordinator do
   @doc """
   Returns current Coordinator status including last reload result.
   """
+  @spec status() :: map()
   def status do
     GenServer.call(__MODULE__, :status)
   end
@@ -65,6 +69,7 @@ defmodule Spark.HotReload.Coordinator do
   @doc """
   Resets the Coordinator state (useful for testing).
   """
+  @spec reset() :: :ok
   def reset do
     GenServer.call(__MODULE__, :reset)
   end
@@ -73,22 +78,35 @@ defmodule Spark.HotReload.Coordinator do
 
   @impl true
   def init(_opts) do
+    Logger.metadata(actor: :hot_reload_coordinator)
     {:ok, %__MODULE__{}}
   end
 
   @impl true
   def handle_call({:reload_type, type}, _from, state) do
     result = do_reload_type(type)
-    new_state = %{state | last_reload: result, reload_count: state.reload_count + 1,
-                          status: if(result.status == :success, do: :success, else: :failed)}
+
+    new_state = %{
+      state
+      | last_reload: result,
+        reload_count: state.reload_count + 1,
+        status: if(result.status == :success, do: :success, else: :failed)
+    }
+
     {:reply, {:ok, result}, new_state}
   end
 
   @impl true
   def handle_call({:reload_file, path}, _from, state) do
     result = do_reload_file(path)
-    new_state = %{state | last_reload: result, reload_count: state.reload_count + 1,
-                          status: if(result.status == :success, do: :success, else: :failed)}
+
+    new_state = %{
+      state
+      | last_reload: result,
+        reload_count: state.reload_count + 1,
+        status: if(result.status == :success, do: :success, else: :failed)
+    }
+
     {:reply, {:ok, result}, new_state}
   end
 
@@ -99,6 +117,7 @@ defmodule Spark.HotReload.Coordinator do
       reload_count: state.reload_count,
       last_reload: state.last_reload
     }
+
     {:reply, status, state}
   end
 
@@ -124,11 +143,16 @@ defmodule Spark.HotReload.Coordinator do
     failed = Enum.filter(results, &(&1.status == :failed))
 
     if Enum.empty?(failed) do
-      %{type: type, component_key: nil, status: :success, timestamp: now,
-        error: nil, path: nil}
+      %{type: type, component_key: nil, status: :success, timestamp: now, error: nil, path: nil}
     else
-      %{type: type, component_key: nil, status: :failed, timestamp: now,
-        error: {:partial_failures, length(failed), length(results)}, path: nil}
+      %{
+        type: type,
+        component_key: nil,
+        status: :failed,
+        timestamp: now,
+        error: {:partial_failures, length(failed), length(results)},
+        path: nil
+      }
     end
   end
 
@@ -145,24 +169,43 @@ defmodule Spark.HotReload.Coordinator do
         case apply_reload(path, component_key) do
           {:ok, _entry} ->
             Logger.info("HotReload: completed reload of #{path}")
-            %{type: elem(component_key, 0), component_key: component_key,
-              status: :success, timestamp: DateTime.utc_now(), error: nil, path: path}
+
+            %{
+              type: elem(component_key, 0),
+              component_key: component_key,
+              status: :success,
+              timestamp: DateTime.utc_now(),
+              error: nil,
+              path: path
+            }
 
           {:error, reason} ->
             # Step 3: Rollback on failure
             Logger.warning("HotReload: reload failed for #{path}: #{inspect(reason)}")
             Spark.HotReload.Rollback.rollback(component_key, reason)
 
-            %{type: elem(component_key, 0), component_key: component_key,
-              status: :failed, timestamp: DateTime.utc_now(), error: reason, path: path}
+            %{
+              type: elem(component_key, 0),
+              component_key: component_key,
+              status: :failed,
+              timestamp: DateTime.utc_now(),
+              error: reason,
+              path: path
+            }
         end
 
       {:error, reason} ->
         Logger.warning("HotReload: validation failed for #{path}: #{inspect(reason)}")
 
         # Don't rollback if validation fails — nothing was applied yet
-        %{type: detect_type_from_path(path), component_key: component_key,
-          status: :failed, timestamp: now, error: reason, path: path}
+        %{
+          type: detect_type_from_path(path),
+          component_key: component_key,
+          status: :failed,
+          timestamp: now,
+          error: reason,
+          path: path
+        }
     end
   end
 

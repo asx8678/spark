@@ -50,25 +50,24 @@ defmodule Spark.Memory.Silver do
     if not silver_enabled?() do
       {:error, :silver_disabled}
     else
+      llm_fn = resolve_llm_fn(opts)
+      actor_type = Keyword.get(opts, :actor_type, :orchestrator)
 
-    llm_fn = resolve_llm_fn(opts)
-    actor_type = Keyword.get(opts, :actor_type, :orchestrator)
+      estimated_tokens = estimate_tokens(history)
+      entry_count = length(history)
 
-    estimated_tokens = estimate_tokens(history)
-    entry_count = length(history)
+      # Build the compaction prompt
+      messages = build_compaction_messages(history, session_id)
 
-    # Build the compaction prompt
-    messages = build_compaction_messages(history, session_id)
+      case llm_fn.(actor_type, messages, %{}) do
+        {:ok, response} ->
+          summary_text = extract_content(response)
+          result = parse_summary(summary_text, session_id, entry_count, estimated_tokens)
+          {:ok, result}
 
-    case llm_fn.(actor_type, messages, %{}) do
-      {:ok, response} ->
-        summary_text = extract_content(response)
-        result = parse_summary(summary_text, session_id, entry_count, estimated_tokens)
-        {:ok, result}
-
-      {:error, reason} ->
-        {:error, {:compaction_llm_error, reason}}
-    end
+        {:error, reason} ->
+          {:error, {:compaction_llm_error, reason}}
+      end
     end
   end
 
@@ -82,9 +81,11 @@ defmodule Spark.Memory.Silver do
   end
 
   @doc "Returns the token threshold for compaction."
+  @spec token_threshold() :: non_neg_integer()
   def token_threshold, do: @default_token_threshold
 
   @doc "Returns whether Silver compaction is enabled."
+  @spec silver_enabled?() :: boolean()
   def silver_enabled? do
     Config.get([:memory, :silver_enabled], true) in [true, "true"]
   end
@@ -100,12 +101,13 @@ defmodule Spark.Memory.Silver do
   end
 
   defp mock_llm(_actor_type, _messages, _opts) do
-    {:ok, %{
-      id: "mock-compact",
-      model: "mock",
-      choices: [%{message: %{role: "assistant", content: mock_summary()}}],
-      usage: %{prompt_tokens: 100, completion_tokens: 50, total_tokens: 150}
-    }}
+    {:ok,
+     %{
+       id: "mock-compact",
+       model: "mock",
+       choices: [%{message: %{role: "assistant", content: mock_summary()}}],
+       usage: %{prompt_tokens: 100, completion_tokens: 50, total_tokens: 150}
+     }}
   end
 
   defp mock_summary do
@@ -156,7 +158,9 @@ defmodule Spark.Memory.Silver do
   defp parse_summary(text, session_id, entry_count, estimated_tokens) do
     parsed =
       case Jason.decode(text) do
-        {:ok, json} -> json
+        {:ok, json} ->
+          json
+
         {:error, _} ->
           # Try to extract JSON from markdown fences
           case Regex.run(~r/```json\s*(.*?)\s*```/s, text) do
@@ -165,7 +169,9 @@ defmodule Spark.Memory.Silver do
                 {:ok, json} -> json
                 {:error, _} -> %{"summary" => text}
               end
-            _ -> %{"summary" => text}
+
+            _ ->
+              %{"summary" => text}
           end
       end
 

@@ -96,6 +96,7 @@ defmodule Spark.TUI.EventLog do
     case :ets.whereis(@table) do
       :undefined ->
         :ets.new(@table, [:set, :named_table, :public, write_concurrency: true])
+
       _tid ->
         :ok
     end

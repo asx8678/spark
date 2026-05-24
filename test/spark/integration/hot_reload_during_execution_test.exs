@@ -47,7 +47,8 @@ defmodule Spark.Integration.HotReloadDuringExecutionTest do
 
       try do
         if pid = Process.whereis(Spark.Dispatcher), do: GenServer.stop(pid, :shutdown)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
 
       # Don't stop Policy or Config agents — they may cascade
@@ -64,34 +65,54 @@ defmodule Spark.Integration.HotReloadDuringExecutionTest do
     Task.new(Map.merge(%{plan_id: "hot_reload_plan", title: "Task #{id}", id: id}, opts))
   end
 
+  defp await_worker_exit(pid, timeout \\ 2000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    if Process.alive?(pid) and System.monotonic_time(:millisecond) < deadline do
+      ref = Process.monitor(pid)
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _} -> true
+      after
+        50 -> Process.sleep(10)
+      end
+      await_worker_exit(pid, deadline - System.monotonic_time(:millisecond))
+    end
+
+    not Process.alive?(pid)
+  end
+
   defp success_response(content \\ "mock response") do
-    {:ok, %{
-      id: "chatcmpl-test",
-      model: "mock-model",
-      choices: [%{message: %{role: "assistant", content: content}}],
-      usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-    }}
+    {:ok,
+     %{
+       id: "chatcmpl-test",
+       model: "mock-model",
+       choices: [%{message: %{role: "assistant", content: content}}],
+       usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+     }}
   end
 
   defp tool_call_response(tool_name \\ "read_file") do
-    {:ok, %{
-      id: "chatcmpl-test",
-      model: "mock-model",
-      choices: [%{
-        message: %{
-          role: "assistant",
-          content: nil,
-          tool_calls: [
-            %{
-              id: "tc1",
-              type: "function",
-              function: %{name: tool_name, arguments: %{path: "/tmp/test"}}
-            }
-          ]
-        }
-      }],
-      usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-    }}
+    {:ok,
+     %{
+       id: "chatcmpl-test",
+       model: "mock-model",
+       choices: [
+         %{
+           message: %{
+             role: "assistant",
+             content: nil,
+             tool_calls: [
+               %{
+                 id: "tc1",
+                 type: "function",
+                 function: %{name: tool_name, arguments: %{path: "/tmp/test"}}
+               }
+             ]
+           }
+         }
+       ],
+       usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+     }}
   end
 
   # App tree helpers are in Spark.Integration.TestHelpers
@@ -132,13 +153,16 @@ defmodule Spark.Integration.HotReloadDuringExecutionTest do
         )
 
       assert_receive :first_iteration, 500
-      Process.sleep(20)
+      # Give the Worker time to process the async LLM result and move
+      # to the between-iterations state (tool calls → next execute_step)
+      Process.sleep(100)
 
       # Fire prompt reload while Worker is between iterations
       EventBus.publish_hot_reload(:prompt_reloaded, %{new_version: "v_reload_1"})
 
       # Worker should complete successfully with the original version
       assert_receive %Event{type: :task_completed, task_id: ^task_id}, 2000
+      await_worker_exit(pid)
       refute Process.alive?(pid)
     end
   end
@@ -159,6 +183,7 @@ defmodule Spark.Integration.HotReloadDuringExecutionTest do
         )
 
       assert_receive %Event{type: :task_completed, task_id: ^task1_id}, 1000
+      await_worker_exit(pid1)
       refute Process.alive?(pid1)
 
       EventBus.publish_hot_reload(:prompt_reloaded, %{new_version: "v_post_reload"})
@@ -177,6 +202,7 @@ defmodule Spark.Integration.HotReloadDuringExecutionTest do
         )
 
       assert_receive %Event{type: :task_completed, task_id: ^task2_id}, 1000
+      await_worker_exit(pid2)
       refute Process.alive?(pid2)
     end
   end
@@ -312,8 +338,17 @@ defmodule Spark.Integration.HotReloadDuringExecutionTest do
       Process.sleep(50)
 
       # Manually write to Bronze to simulate subscriber logging
-      Bronze.append(session_id, %{type: :prompt_reloaded, source: :hot_reload, payload: %{new_version: "v2"}})
-      Bronze.append(session_id, %{type: :config_reloaded, source: :hot_reload, payload: %{key: "max_concurrency"}})
+      Bronze.append(session_id, %{
+        type: :prompt_reloaded,
+        source: :hot_reload,
+        payload: %{new_version: "v2"}
+      })
+
+      Bronze.append(session_id, %{
+        type: :config_reloaded,
+        source: :hot_reload,
+        payload: %{key: "max_concurrency"}
+      })
 
       {:ok, entries} = Bronze.read(session_id)
       assert length(entries) >= 2
@@ -378,6 +413,7 @@ defmodule Spark.Integration.HotReloadDuringExecutionTest do
             send(test_pid, {:iteration, n})
             Process.sleep(50)
             tool_call_response()
+
           true ->
             success_response("survived all reloads")
         end

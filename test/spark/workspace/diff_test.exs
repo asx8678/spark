@@ -34,8 +34,10 @@ defmodule Spark.Workspace.DiffTest do
       File.write!(file_path, "alpha\nbeta\ngamma\n")
 
       {:ok, diff} = Diff.capture_diff(file_path, "alpha\ndelta\ngamma\n")
-      assert diff =~ "-"   # should have removals
-      assert diff =~ "+"   # should have additions
+      # should have removals
+      assert diff =~ "-"
+      # should have additions
+      assert diff =~ "+"
     end
   end
 

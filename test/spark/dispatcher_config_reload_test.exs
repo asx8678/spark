@@ -28,23 +28,29 @@ defmodule Spark.DispatcherConfigReloadTest do
 
     if pid = Process.whereis(Spark.Dispatcher), do: GenServer.stop(pid, :shutdown)
 
-    {:ok, _pid} = Dispatcher.start_link(
-      max_concurrency: 1,
-      session_id: "config_session",
-      plan_id: "config_plan"
-    )
+    {:ok, _pid} =
+      Dispatcher.start_link(
+        max_concurrency: 1,
+        session_id: "config_session",
+        plan_id: "config_plan"
+      )
 
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
       EventBus.clear_hooks()
+
       try do
         if pid = Process.whereis(Spark.Dispatcher), do: GenServer.stop(pid, :shutdown)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Spark.Config), do: Agent.stop(pid)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       File.rm_rf!(tmp_dir)
     end)
 
@@ -57,10 +63,17 @@ defmodule Spark.DispatcherConfigReloadTest do
 
   defp spin_until_completed(target, deadline) do
     status = Dispatcher.status()
+
     cond do
-      status.completed_count >= target -> :ok
-      System.monotonic_time(:millisecond) >= deadline -> :ok
-      true -> Process.sleep(30); spin_until_completed(target, deadline)
+      status.completed_count >= target ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        :ok
+
+      true ->
+        Process.sleep(30)
+        spin_until_completed(target, deadline)
     end
   end
 

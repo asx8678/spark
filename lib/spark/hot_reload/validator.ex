@@ -107,7 +107,8 @@ defmodule Spark.HotReload.Validator do
     if File.exists?(path) do
       case File.stat(path) do
         {:ok, %{access: access}} when access in [:read, :read_write] -> :ok
-        _ -> :ok  # If exists, assume readable for now
+        # If exists, assume readable for now
+        _ -> :ok
       end
     else
       {:error, {:not_readable, path}}

@@ -31,10 +31,13 @@ defmodule Spark.Integration.DispatcherConcurrencyTest do
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
       EventBus.clear_hooks()
+
       try do
         if pid = Process.whereis(Spark.Dispatcher), do: GenServer.stop(pid, :shutdown)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       # Don't stop Config Agent — it may cascade to kill Application tree processes
       File.rm_rf!(tmp_dir)
     end)
@@ -46,21 +49,26 @@ defmodule Spark.Integration.DispatcherConcurrencyTest do
     Task.new(Map.merge(%{plan_id: "concurrency_plan", title: "Task #{id}", id: id}, opts))
   end
 
-  defp await_all_completed(count, timeout \\ 5000) do
+  defp await_all_completed(count, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
     spin(deadline, &(&1.completed_count >= count))
   end
 
   defp spin(deadline, check) do
     status = Dispatcher.status()
+
     cond do
-      check.(status) -> :ok
-      System.monotonic_time(:millisecond) >= deadline -> :timeout
-      true -> Process.sleep(20); spin(deadline, check)
+      check.(status) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        :timeout
+
+      true ->
+        Process.sleep(20)
+        spin(deadline, check)
     end
   end
-
-
 
   describe "concurrency enforcement with max_concurrency=3" do
     test "at most 3 workers active simultaneously" do
@@ -76,6 +84,7 @@ defmodule Spark.Integration.DispatcherConcurrencyTest do
       assert :ok = Dispatcher.enqueue("concurrency_plan", tasks)
 
       max_observed = observe_max_concurrency(500)
+
       assert max_observed <= 3,
              "Expected max active workers <= 3, observed #{max_observed}"
     end

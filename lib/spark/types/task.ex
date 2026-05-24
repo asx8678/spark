@@ -54,6 +54,7 @@ defmodule Spark.Types.Task do
   @doc """
   Creates a new Task with auto-generated id and timestamp.
   """
+  @spec new(map()) :: t()
   def new(attrs) when is_map(attrs) do
     now = DateTime.utc_now()
     defaults = %{created_at: now, id: attrs[:id] || generate_id()}
@@ -63,6 +64,7 @@ defmodule Spark.Types.Task do
   @doc """
   Validates a Task struct. Returns :ok or {:error, list_of_errors}.
   """
+  @spec validate(t()) :: :ok | {:error, [{atom(), String.t()}]}
   def validate(%__MODULE__{} = task) do
     errors = []
 
@@ -108,17 +110,20 @@ defmodule Spark.Types.Task do
   Checks if a task is ready to run given a set of completed task IDs.
   Only queued tasks whose dependencies are all completed are ready.
   """
+  @spec ready?(t(), [String.t()]) :: boolean()
   def ready?(%__MODULE__{status: :queued, depends_on: deps}, completed_ids)
       when is_list(completed_ids) do
     Enum.all?(deps, &(&1 in completed_ids))
   end
 
+  @spec ready?(t(), term()) :: false
   def ready?(%__MODULE__{}, _completed_ids), do: false
 
   @doc """
   Detects write path conflicts between two tasks.
   Returns true if both tasks have overlapping write_paths.
   """
+  @spec write_conflicts?(t(), t()) :: boolean()
   def write_conflicts?(
         %__MODULE__{write_paths: paths_a},
         %__MODULE__{write_paths: paths_b}
@@ -127,24 +132,28 @@ defmodule Spark.Types.Task do
     not MapSet.disjoint?(MapSet.new(paths_a), MapSet.new(paths_b))
   end
 
+  @spec write_conflicts?(term(), term()) :: false
   def write_conflicts?(_, _), do: false
 
   @doc """
   Returns true if the task is high risk.
   """
+  @spec high_risk?(t()) :: boolean()
   def high_risk?(%__MODULE__{risk: :high}), do: true
+  @spec high_risk?(t()) :: false
   def high_risk?(%__MODULE__{}), do: false
 
   @doc """
   Increments retry count if under max_retries. Resets status to :queued.
   Returns {:ok, updated_task} or {:error, :max_retries_exceeded}.
   """
+  @spec increment_retry(t()) :: {:ok, t()} | {:error, :max_retries_exceeded}
   def increment_retry(%__MODULE__{retry_count: count, max_retries: max} = task)
       when count < max do
-    {:ok,
-     %{task | retry_count: count + 1, status: :queued, started_at: nil, completed_at: nil}}
+    {:ok, %{task | retry_count: count + 1, status: :queued, started_at: nil, completed_at: nil}}
   end
 
+  @spec increment_retry(t()) :: {:error, :max_retries_exceeded}
   def increment_retry(%__MODULE__{}), do: {:error, :max_retries_exceeded}
 
   defp generate_id do

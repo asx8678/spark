@@ -9,17 +9,18 @@ defmodule Spark.LLM.CacheTest do
     end
 
     test "builds messages in correct order" do
-      messages = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "You are an AI."}],
-        project_rules: [%{role: "system", content: "Use Elixir conventions."}],
-        gold_memory: [%{role: "system", content: "Past knowledge here."}],
-        silver_memory: [%{role: "system", content: "Session summary."}],
-        session_history: [
-          %{role: "user", content: "Fix bug"},
-          %{role: "assistant", content: "Done"}
-        ],
-        current_user_input: [%{role: "user", content: "New request"}]
-      ])
+      messages =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "You are an AI."}],
+          project_rules: [%{role: "system", content: "Use Elixir conventions."}],
+          gold_memory: [%{role: "system", content: "Past knowledge here."}],
+          silver_memory: [%{role: "system", content: "Session summary."}],
+          session_history: [
+            %{role: "user", content: "Fix bug"},
+            %{role: "assistant", content: "Done"}
+          ],
+          current_user_input: [%{role: "user", content: "New request"}]
+        )
 
       # First message should be version marker
       assert [%{role: "system", content: content} | rest] = messages
@@ -39,41 +40,42 @@ defmodule Spark.LLM.CacheTest do
     end
 
     test "omits version marker when no static content" do
-      messages = Cache.build_messages([
-        session_history: [%{role: "user", content: "Hello"}]
-      ])
+      messages = Cache.build_messages(session_history: [%{role: "user", content: "Hello"}])
 
       # No version marker since no static content
       refute Enum.any?(messages, fn m ->
-        String.starts_with?(Map.get(m, :content, ""), "[spark:prefix_version:")
-      end)
+               String.starts_with?(Map.get(m, :content, ""), "[spark:prefix_version:")
+             end)
     end
 
     test "includes version in prefix marker" do
-      messages = Cache.build_messages(
-        [static_prefix: [%{role: "system", content: "System prompt"}]],
-        prompt_version: "v2"
-      )
+      messages =
+        Cache.build_messages(
+          [static_prefix: [%{role: "system", content: "System prompt"}]],
+          prompt_version: "v2"
+        )
 
       assert [%{content: "[spark:prefix_version:v2]"} | _] = messages
     end
 
     test "handles worker_result category" do
-      messages = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Sys"}],
-        worker_result: [%{role: "assistant", content: "Task completed"}]
-      ])
+      messages =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "Sys"}],
+          worker_result: [%{role: "assistant", content: "Task completed"}]
+        )
 
       # Should include worker_result at the end
       assert List.last(messages).content == "Task completed"
     end
 
     test "skips nil/missing categories" do
-      messages = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Sys"}],
-        gold_memory: nil,
-        session_history: [%{role: "user", content: "Hi"}]
-      ])
+      messages =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "Sys"}],
+          gold_memory: nil,
+          session_history: [%{role: "user", content: "Hi"}]
+        )
 
       # version marker + sys + hi + boundary = 4
       assert length(messages) == 4
@@ -82,10 +84,11 @@ defmodule Spark.LLM.CacheTest do
 
   describe "prefix_hash/1" do
     test "hash is stable with same static content" do
-      messages = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Fixed prompt"}],
-        session_history: [%{role: "user", content: "Hello"}]
-      ])
+      messages =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "Fixed prompt"}],
+          session_history: [%{role: "user", content: "Hello"}]
+        )
 
       hash1 = Cache.prefix_hash(messages)
       hash2 = Cache.prefix_hash(messages)
@@ -93,53 +96,69 @@ defmodule Spark.LLM.CacheTest do
     end
 
     test "hash changes when static content changes" do
-      messages1 = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Prompt A"}]
-      ], prompt_version: "v1")
+      messages1 =
+        Cache.build_messages(
+          [
+            static_prefix: [%{role: "system", content: "Prompt A"}]
+          ],
+          prompt_version: "v1"
+        )
 
-      messages2 = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Prompt B"}]
-      ], prompt_version: "v1")
+      messages2 =
+        Cache.build_messages(
+          [
+            static_prefix: [%{role: "system", content: "Prompt B"}]
+          ],
+          prompt_version: "v1"
+        )
 
       refute Cache.prefix_hash(messages1) == Cache.prefix_hash(messages2)
     end
 
     test "hash changes when prompt version changes" do
-      messages_v1 = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Same prompt"}]
-      ], prompt_version: "v1")
+      messages_v1 =
+        Cache.build_messages(
+          [
+            static_prefix: [%{role: "system", content: "Same prompt"}]
+          ],
+          prompt_version: "v1"
+        )
 
-      messages_v2 = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Same prompt"}]
-      ], prompt_version: "v2")
+      messages_v2 =
+        Cache.build_messages(
+          [
+            static_prefix: [%{role: "system", content: "Same prompt"}]
+          ],
+          prompt_version: "v2"
+        )
 
       refute Cache.prefix_hash(messages_v1) == Cache.prefix_hash(messages_v2)
     end
 
     test "dynamic content changes do not alter prefix hash" do
-      base = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "System prompt"}],
-        project_rules: [%{role: "system", content: "Rules"}],
-        session_history: [%{role: "user", content: "First question"}]
-      ])
+      base =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "System prompt"}],
+          project_rules: [%{role: "system", content: "Rules"}],
+          session_history: [%{role: "user", content: "First question"}]
+        )
 
-      modified = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "System prompt"}],
-        project_rules: [%{role: "system", content: "Rules"}],
-        session_history: [
-          %{role: "user", content: "First question"},
-          %{role: "assistant", content: "First answer"},
-          %{role: "user", content: "Second question"}
-        ]
-      ])
+      modified =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "System prompt"}],
+          project_rules: [%{role: "system", content: "Rules"}],
+          session_history: [
+            %{role: "user", content: "First question"},
+            %{role: "assistant", content: "First answer"},
+            %{role: "user", content: "Second question"}
+          ]
+        )
 
       assert Cache.prefix_hash(base) == Cache.prefix_hash(modified)
     end
 
     test "hash is a 64-char hex string (SHA256)" do
-      messages = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Prompt"}]
-      ])
+      messages = Cache.build_messages(static_prefix: [%{role: "system", content: "Prompt"}])
 
       hash = Cache.prefix_hash(messages)
       assert is_binary(hash)
@@ -150,14 +169,15 @@ defmodule Spark.LLM.CacheTest do
 
   describe "split_static_dynamic/1" do
     test "splits at system/user boundary" do
-      messages = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Sys prompt"}],
-        project_rules: [%{role: "system", content: "Rules"}],
-        session_history: [
-          %{role: "user", content: "Question"},
-          %{role: "assistant", content: "Answer"}
-        ]
-      ])
+      messages =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "Sys prompt"}],
+          project_rules: [%{role: "system", content: "Rules"}],
+          session_history: [
+            %{role: "user", content: "Question"},
+            %{role: "assistant", content: "Answer"}
+          ]
+        )
 
       {static, dynamic} = Cache.split_static_dynamic(messages)
 
@@ -169,10 +189,11 @@ defmodule Spark.LLM.CacheTest do
     end
 
     test "all messages are static when no dynamic content" do
-      messages = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "Sys"}],
-        project_rules: [%{role: "system", content: "Rules"}]
-      ])
+      messages =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "Sys"}],
+          project_rules: [%{role: "system", content: "Rules"}]
+        )
 
       {static, dynamic} = Cache.split_static_dynamic(messages)
       assert length(static) >= 2
@@ -206,22 +227,24 @@ defmodule Spark.LLM.CacheTest do
 
     test "dynamic compaction doesn't alter prefix hash" do
       # Simulate compaction: replace session history with summary
-      before_compaction = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "You are helpful."}],
-        project_rules: [%{role: "system", content: "Use SOLID."}],
-        session_history: [
-          %{role: "user", content: "Q1"},
-          %{role: "assistant", content: "A1"},
-          %{role: "user", content: "Q2"},
-          %{role: "assistant", content: "A2"}
-        ]
-      ])
+      before_compaction =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "You are helpful."}],
+          project_rules: [%{role: "system", content: "Use SOLID."}],
+          session_history: [
+            %{role: "user", content: "Q1"},
+            %{role: "assistant", content: "A1"},
+            %{role: "user", content: "Q2"},
+            %{role: "assistant", content: "A2"}
+          ]
+        )
 
-      after_compaction = Cache.build_messages([
-        static_prefix: [%{role: "system", content: "You are helpful."}],
-        project_rules: [%{role: "system", content: "Use SOLID."}],
-        silver_memory: [%{role: "system", content: "Session: Q1→A1, Q2→A2"}]
-      ])
+      after_compaction =
+        Cache.build_messages(
+          static_prefix: [%{role: "system", content: "You are helpful."}],
+          project_rules: [%{role: "system", content: "Use SOLID."}],
+          silver_memory: [%{role: "system", content: "Session: Q1→A1, Q2→A2"}]
+        )
 
       assert Cache.prefix_hash(before_compaction) == Cache.prefix_hash(after_compaction)
     end

@@ -16,25 +16,35 @@ defmodule Spark.HotReload.Rollback do
   """
   @spec rollback({atom(), atom() | String.t()}, term()) :: :ok | {:error, term()}
   def rollback(component_key, error) do
-    Logger.warning("HotReload rollback triggered for #{inspect(component_key)}: #{inspect(error)}")
+    Logger.warning(
+      "HotReload rollback triggered for #{inspect(component_key)}: #{inspect(error)}"
+    )
 
     case Spark.HotReload.Manifest.previous(component_key) do
       nil ->
-        Logger.error("HotReload rollback failed: no previous version for #{inspect(component_key)}")
+        Logger.error(
+          "HotReload rollback failed: no previous version for #{inspect(component_key)}"
+        )
+
         {:error, :no_previous_version}
 
       _previous ->
         case Spark.HotReload.Manifest.rollback_to_previous(component_key) do
           {:ok, rolled_back} ->
-            Logger.info("HotReload rollback succeeded for #{inspect(component_key)}, " <>
-                        "restored version: #{rolled_back.version}")
+            Logger.info(
+              "HotReload rollback succeeded for #{inspect(component_key)}, " <>
+                "restored version: #{rolled_back.version}"
+            )
 
             # Per-component rollback side effects
             apply_rollback_side_effects(component_key, rolled_back)
             :ok
 
           {:error, reason} ->
-            Logger.error("HotReload rollback failed for #{inspect(component_key)}: #{inspect(reason)}")
+            Logger.error(
+              "HotReload rollback failed for #{inspect(component_key)}: #{inspect(reason)}"
+            )
+
             {:error, reason}
         end
     end
@@ -58,6 +68,7 @@ defmodule Spark.HotReload.Rollback do
     if Map.has_key?(rolled_back.metadata, :config_data) do
       Logger.info("HotReload: restoring previous config to runtime")
     end
+
     :ok
   end
 

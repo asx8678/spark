@@ -33,6 +33,10 @@ defmodule Spark.ToolRunner do
   def run(tool_name, args, context) when is_binary(tool_name) and is_map(context) do
     # LLM tool_calls may pass args as a JSON string — decode if needed
     args = normalize_args(args)
+    # Atomize string keys based on known schema keys (bounded, safe)
+    args = atomize_keys(args, tool_name)
+    # Inject task_id from context when schema requires it
+    args = inject_task_id(args, context, tool_name)
     timeout = Map.get(context, :timeout_ms, @default_timeout_ms)
     max_output = Map.get(context, :max_output_bytes, @max_output_bytes)
 
@@ -49,13 +53,100 @@ defmodule Spark.ToolRunner do
   end
 
   defp normalize_args(args) when is_map(args), do: args
+
   defp normalize_args(args) when is_binary(args) do
     case Jason.decode(args) do
       {:ok, decoded} when is_map(decoded) -> decoded
       _ -> %{}
     end
   end
+
   defp normalize_args(_), do: %{}
+
+  defp atomize_keys(args, tool_name) when is_map(args) do
+    # Build a reverse map from string keys to known atom keys.
+    # Only atomize string keys that match known schema keys — avoids
+    # creating arbitrary atoms from LLM/user input.
+    known_keys = known_schema_keys(tool_name)
+    string_to_atom = build_string_to_atom_map(known_keys)
+
+    args
+    |> Enum.map(fn {k, v} ->
+      case k do
+        s when is_binary(s) ->
+          case Map.get(string_to_atom, s) do
+            nil -> {s, v}
+            atom_key -> {atom_key, v}
+          end
+
+        atom when is_atom(atom) ->
+          {atom, v}
+
+        _ ->
+          {k, v}
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp atomize_keys(args, _tool_name), do: args
+
+  # Builds a string->atom map from known schema keys so we never call
+  # String.to_atom on arbitrary LLM input.
+  defp build_string_to_atom_map(known_keys) do
+    known_keys
+    |> MapSet.to_list()
+    |> Enum.filter(&is_atom/1)
+    |> Map.new(fn atom -> {Atom.to_string(atom), atom} end)
+  end
+
+  defp known_schema_keys(tool_name) do
+    case ToolRegistry.lookup(tool_name) do
+      {:ok, %{module: mod}} ->
+        try do
+          schema = mod.schema()
+          required = Map.get(schema, :required, Map.get(schema, "required", []))
+          properties = Map.get(schema, :properties, Map.get(schema, "properties", %{}))
+
+          prop_keys =
+            Map.keys(properties)
+            |> Enum.map(fn
+              k when is_atom(k) -> k
+              k when is_binary(k) -> String.to_existing_atom(k)
+              k -> k
+            end)
+
+          req_keys =
+            Enum.map(required, fn
+              k when is_atom(k) -> k
+              k when is_binary(k) -> String.to_existing_atom(k)
+              k -> k
+            end)
+
+          MapSet.new(prop_keys ++ req_keys)
+        rescue
+          _ -> MapSet.new()
+        end
+
+      {:error, _} ->
+        MapSet.new()
+    end
+  end
+
+  defp inject_task_id(args, context, tool_name) do
+    # If the tool schema requires task_id and context has one, inject it
+    required_keys = known_schema_keys(tool_name)
+    task_id_in_schema = MapSet.member?(required_keys, :task_id)
+    context_task_id = Map.get(context, :task_id)
+    has_task_id_arg = Map.has_key?(args, :task_id) or Map.has_key?(args, "task_id")
+
+    if task_id_in_schema and not has_task_id_arg and is_binary(context_task_id) and
+         context_task_id != "" do
+      Map.put(args, :task_id, context_task_id)
+    else
+      args
+    end
+  end
 
   # --- Steps ---
 
@@ -69,10 +160,18 @@ defmodule Spark.ToolRunner do
   defp validate_schema(tool_mod, args) do
     schema = tool_mod.schema()
     required = Map.get(schema, :required, Map.get(schema, "required", []))
+    known_keys = known_schema_keys(tool_mod.name())
+    string_to_atom = build_string_to_atom_map(known_keys)
 
     missing =
       Enum.filter(required, fn key ->
-        k = if is_binary(key), do: String.to_atom(key), else: key
+        k =
+          case key do
+            s when is_binary(s) -> Map.get(string_to_atom, s, s)
+            a when is_atom(a) -> a
+            other -> other
+          end
+
         not Map.has_key?(args, k) and not Map.has_key?(args, key)
       end)
 
@@ -119,11 +218,12 @@ defmodule Spark.ToolRunner do
   # --- Output truncation ---
 
   defp truncate_output(result, max_bytes) when is_map(result) do
-    encoded = try do
-      :erlang.term_to_binary(result)
-    rescue
-      _ -> nil
-    end
+    encoded =
+      try do
+        :erlang.term_to_binary(result)
+      rescue
+        _ -> nil
+      end
 
     if encoded && byte_size(encoded) > max_bytes do
       truncate_map_values(result, max_bytes)
@@ -160,43 +260,57 @@ defmodule Spark.ToolRunner do
     task_id = Map.get(context, :task_id, "")
     session_id = Map.get(context, :session_id, "")
 
-    EventBus.publish_event(:tool_started, %{tool: tool_name}, [
+    EventBus.publish_event(:tool_started, %{tool: tool_name},
       task_id: task_id,
       session_id: session_id,
       source: :tool_runner
-    ])
+    )
   end
 
   defp publish_completed(tool_name, result, context) do
     task_id = Map.get(context, :task_id, "")
     session_id = Map.get(context, :session_id, "")
 
-    EventBus.publish_event(:tool_completed, %{tool: tool_name, result: result}, [
+    EventBus.publish_event(:tool_completed, %{tool: tool_name, result: result},
       task_id: task_id,
       session_id: session_id,
       source: :tool_runner
-    ])
+    )
   end
 
   defp publish_failed(tool_name, reason, context) do
     task_id = Map.get(context, :task_id, "")
     session_id = Map.get(context, :session_id, "")
 
-    EventBus.publish_event(:tool_failed, %{tool: tool_name, reason: reason}, [
+    EventBus.publish_event(:tool_failed, %{tool: tool_name, reason: reason},
       task_id: task_id,
       session_id: session_id,
       source: :tool_runner
-    ])
+    )
   end
 
   # --- Helpers ---
 
-  defp format_error({:tool_not_found, name}), do: %{tool: name, reason: :not_found, status: :not_found}
-  defp format_error({:schema_validation_failed, missing}), do: %{reason: {:missing_required, missing}, status: :schema_error}
-  defp format_error({:blocked_by_policy, name}), do: %{tool: name, reason: :blocked_by_policy, status: :policy_error}
-  defp format_error({:not_in_allowlist, name}), do: %{tool: name, reason: :not_in_allowlist, status: :policy_error}
-  defp format_error({:critical_blocked, name}), do: %{tool: name, reason: :critical_blocked, status: :policy_error}
-  defp format_error({:high_risk_blocked, name}), do: %{tool: name, reason: :high_risk_blocked, status: :policy_error}
-  defp format_error({:missing_task_id, msg}), do: %{reason: {:missing_task_id, msg}, status: :policy_error}
+  defp format_error({:tool_not_found, name}),
+    do: %{tool: name, reason: :not_found, status: :not_found}
+
+  defp format_error({:schema_validation_failed, missing}),
+    do: %{reason: {:missing_required, missing}, status: :schema_error}
+
+  defp format_error({:blocked_by_policy, name}),
+    do: %{tool: name, reason: :blocked_by_policy, status: :policy_error}
+
+  defp format_error({:not_in_allowlist, name}),
+    do: %{tool: name, reason: :not_in_allowlist, status: :policy_error}
+
+  defp format_error({:critical_blocked, name}),
+    do: %{tool: name, reason: :critical_blocked, status: :policy_error}
+
+  defp format_error({:high_risk_blocked, name}),
+    do: %{tool: name, reason: :high_risk_blocked, status: :policy_error}
+
+  defp format_error({:missing_task_id, msg}),
+    do: %{reason: {:missing_task_id, msg}, status: :policy_error}
+
   defp format_error(reason), do: %{reason: reason, status: :error}
 end

@@ -70,49 +70,49 @@ defmodule Spark.Workspace.Diff do
 
   defp build_diff(path, before, after_content, nil) do
     # No git — simple before/after
-    [
-      "--- #{path} (before)",
-      "+++ #{path} (after)",
-      ""
-    ] ++
-      diff_lines(before, after_content)
+    ([
+       "--- #{path} (before)",
+       "+++ #{path} (after)",
+       ""
+     ] ++
+       diff_lines(before, after_content))
     |> Enum.join("\n")
   end
 
   defp build_diff(path, before, after_content, _git_root) do
     # Git repo — produce unified diff format
-    [
-      "--- a/#{path}",
-      "+++ b/#{path}",
-      "@@ -1,#{line_count(before)} +1,#{line_count(after_content)} @@",
-      ""
-    ] ++
-      unified_diff_lines(before, after_content)
+    ([
+       "--- a/#{path}",
+       "+++ b/#{path}",
+       "@@ -1,#{line_count(before)} +1,#{line_count(after_content)} @@",
+       ""
+     ] ++
+       unified_diff_lines(before, after_content))
     |> Enum.join("\n")
   end
 
   defp build_new_file_diff(path, content, nil) do
     # New file, no git
-    [
-      "--- /dev/null",
-      "+++ #{path}",
-      ""
-    ] ++
-      String.split(content, "\n")
-      |> Enum.map(&("+" <> &1))
+    ([
+       "--- /dev/null",
+       "+++ #{path}",
+       ""
+     ] ++
+       String.split(content, "\n"))
+    |> Enum.map(&("+" <> &1))
     |> Enum.join("\n")
   end
 
   defp build_new_file_diff(path, content, _git_root) do
     # New file in git repo
-    [
-      "--- /dev/null",
-      "+++ b/#{path}",
-      "@@ -0,0 +1,#{line_count(content)} @@",
-      ""
-    ] ++
-      String.split(content, "\n")
-      |> Enum.map(&("+" <> &1))
+    ([
+       "--- /dev/null",
+       "+++ b/#{path}",
+       "@@ -0,0 +1,#{line_count(content)} @@",
+       ""
+     ] ++
+       String.split(content, "\n"))
+    |> Enum.map(&("+" <> &1))
     |> Enum.join("\n")
   end
 

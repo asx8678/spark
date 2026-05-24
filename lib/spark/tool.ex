@@ -34,6 +34,7 @@ defmodule Spark.Tool do
 
     try do
       Code.ensure_loaded(module)
+
       Enum.all?(callbacks, fn {name, arity} ->
         function_exported?(module, name, arity)
       end)

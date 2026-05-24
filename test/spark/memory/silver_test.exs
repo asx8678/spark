@@ -5,7 +5,9 @@ defmodule Spark.Memory.SilverTest do
   alias Spark.Config
 
   setup do
-    tmp_dir = Path.join(System.tmp_dir!(), "spark_silver_test_#{:erlang.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "spark_silver_test_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
 
     orig_home = Application.get_env(:spark, :home_dir)
@@ -44,15 +46,24 @@ defmodule Spark.Memory.SilverTest do
 
     test "compacts with custom llm_fn" do
       custom_fn = fn _actor, _messages, _opts ->
-        {:ok, %{
-          choices: [%{message: %{role: "assistant", content: Jason.encode!(%{
-            summary: "Custom summary",
-            unresolved: ["Custom issue"],
-            decisions: ["Custom decision"],
-            constraints: ["Custom constraint"],
-            tool_outcomes: [%{tool: "custom", status: "ok"}]
-          })}}]
-        }}
+        {:ok,
+         %{
+           choices: [
+             %{
+               message: %{
+                 role: "assistant",
+                 content:
+                   Jason.encode!(%{
+                     summary: "Custom summary",
+                     unresolved: ["Custom issue"],
+                     decisions: ["Custom decision"],
+                     constraints: ["Custom constraint"],
+                     tool_outcomes: [%{tool: "custom", status: "ok"}]
+                   })
+               }
+             }
+           ]
+         }}
       end
 
       {:ok, result} = Silver.compact("sess_custom", [%{"type" => "test"}], llm_fn: custom_fn)
@@ -78,13 +89,8 @@ defmodule Spark.Memory.SilverTest do
 
     test "parses JSON from markdown fences" do
       fence_fn = fn _actor, _messages, _opts ->
-        content = "```json\n#{Jason.encode!(%{
-          summary: "Fenced summary",
-          unresolved: [],
-          decisions: [],
-          constraints: [],
-          tool_outcomes: []
-        })}\n```"
+        content =
+          "```json\n#{Jason.encode!(%{summary: "Fenced summary", unresolved: [], decisions: [], constraints: [], tool_outcomes: []})}\n```"
 
         {:ok, %{choices: [%{message: %{role: "assistant", content: content}}]}}
       end
@@ -103,9 +109,10 @@ defmodule Spark.Memory.SilverTest do
 
     test "returns true for large history" do
       # Create lots of entries to exceed threshold
-      history = for i <- 1..5000 do
-        %{"type" => "test", "payload" => %{"msg" => "entry #{i} with some content"}}
-      end
+      history =
+        for i <- 1..5000 do
+          %{"type" => "test", "payload" => %{"msg" => "entry #{i} with some content"}}
+        end
 
       assert Silver.should_compact?(history, threshold: 100)
     end

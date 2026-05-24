@@ -37,17 +37,22 @@ defmodule Spark.Memory do
   def filter_secrets(other), do: other
 
   @doc "Delegates to Bronze.append/2"
+  @spec append(String.t(), map()) :: :ok | {:error, term()}
   defdelegate append(session_id, event), to: Bronze, as: :append
 
   @doc "Delegates to Silver.compact/2"
+  @spec compact(String.t(), [map()]) :: {:ok, map()} | {:error, term()}
   defdelegate compact(session_id, history), to: Silver, as: :compact
 
   @doc "Delegates to Gold.append_gold/1"
+  @spec append_gold(String.t()) :: :ok | {:error, term()}
   defdelegate append_gold(note), to: Gold, as: :append_gold
 
   @doc "Delegates to Gold.read_gold/0"
+  @spec read_gold() :: {:ok, String.t()} | {:error, term()}
   defdelegate read_gold, to: Gold
 
   @doc "Returns the secret keys list (for testing)."
+  @spec secret_keys() :: [String.t()]
   def secret_keys, do: @secret_keys
 end

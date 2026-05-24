@@ -10,7 +10,8 @@ defmodule Spark.Types.PlanTest do
 
   describe "new/1" do
     test "creates a valid plan with defaults" do
-      plan = Plan.new(%{user_goal: "Add auth", summary: "Add authentication", tasks: [valid_task()]})
+      plan =
+        Plan.new(%{user_goal: "Add auth", summary: "Add authentication", tasks: [valid_task()]})
 
       assert plan.id != nil
       assert plan.user_goal == "Add auth"
@@ -29,7 +30,9 @@ defmodule Spark.Types.PlanTest do
 
   describe "validate/1" do
     test "valid plan returns :ok" do
-      plan = Plan.new(%{user_goal: "Add auth", summary: "Add authentication", tasks: [valid_task()]})
+      plan =
+        Plan.new(%{user_goal: "Add auth", summary: "Add authentication", tasks: [valid_task()]})
+
       assert :ok = Plan.validate(plan)
     end
 

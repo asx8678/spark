@@ -35,6 +35,7 @@ defmodule Spark.Types.Event do
   @doc """
   Creates a new Event with auto-generated id and timestamp.
   """
+  @spec new(atom(), map(), keyword()) :: t()
   def new(type, payload \\ %{}, opts \\ []) when is_atom(type) and is_map(payload) do
     now = DateTime.utc_now()
     id = opts[:id] || generate_id()
@@ -59,6 +60,7 @@ defmodule Spark.Types.Event do
   @doc """
   Validates an Event struct.
   """
+  @spec validate(t()) :: :ok | {:error, [{atom(), String.t()}]}
   def validate(%__MODULE__{} = event) do
     errors = []
 
@@ -88,6 +90,7 @@ defmodule Spark.Types.Event do
   @doc """
   Convenience helper for hot reload events.
   """
+  @spec hot_reload(atom(), map(), keyword()) :: t()
   def hot_reload(type, payload \\ %{}, opts \\ []) do
     opts = Keyword.merge([topic: "spark:hot_reload", source: :hot_reload], opts)
     new(type, payload, opts)
@@ -96,6 +99,7 @@ defmodule Spark.Types.Event do
   @doc """
   Convenience helper for task-scoped events.
   """
+  @spec task_event(atom(), String.t(), map(), keyword()) :: t()
   def task_event(type, task_id, payload \\ %{}, opts \\ []) do
     opts = Keyword.merge([task_id: task_id, topic: "spark:task:#{task_id}"], opts)
     new(type, payload, opts)
@@ -104,6 +108,7 @@ defmodule Spark.Types.Event do
   @doc """
   Convenience helper for plan-scoped events.
   """
+  @spec plan_event(atom(), String.t(), map(), keyword()) :: t()
   def plan_event(type, plan_id, payload \\ %{}, opts \\ []) do
     opts = Keyword.merge([plan_id: plan_id, topic: "spark:plan:#{plan_id}"], opts)
     new(type, payload, opts)

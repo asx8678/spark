@@ -21,12 +21,13 @@ defmodule Spark.LLM.MockProvider do
   @behaviour Spark.LLM.Provider
 
   @table :spark_mock_provider_responses
-  @default_response {:ok, %{
-    id: "chatcmpl-mock",
-    model: "mock-model",
-    choices: [%{message: %{role: "assistant", content: "mock response"}}],
-    usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-  }}
+  @default_response {:ok,
+                     %{
+                       id: "chatcmpl-mock",
+                       model: "mock-model",
+                       choices: [%{message: %{role: "assistant", content: "mock response"}}],
+                       usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+                     }}
 
   @default_stream_chunks [
     {:chunk, %{delta: %{content: "mock "}}},
@@ -74,6 +75,7 @@ defmodule Spark.LLM.MockProvider do
   @spec queue_length(pid()) :: non_neg_integer()
   def queue_length(pid) when is_pid(pid) do
     ensure_table()
+
     case :ets.lookup(@table, pid) do
       [{^pid, responses}] -> length(responses)
       [] -> 0
@@ -83,8 +85,9 @@ defmodule Spark.LLM.MockProvider do
   # --- Provider Behaviour ---
 
   @impl true
-  def complete(_messages, _opts) do
-    caller = self()
+  @spec complete([map()], map()) :: {:ok, map()} | {:error, term()}
+  def complete(_messages, opts) do
+    caller = Map.get(opts, :mock_caller_pid, self())
     ensure_table()
 
     case :ets.lookup(@table, caller) do
@@ -103,6 +106,7 @@ defmodule Spark.LLM.MockProvider do
   end
 
   @impl true
+  @spec stream([map()], map(), function()) :: {:ok, map()} | {:error, term()}
   def stream(_messages, _opts, callback) do
     caller = self()
     ensure_table()

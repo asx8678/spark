@@ -42,6 +42,7 @@ defmodule Spark.Memory.Bronze do
       File.mkdir_p!(Path.dirname(path))
 
       line = Jason.encode!(entry) <> "\n"
+
       case File.write(path, line, [:append]) do
         :ok -> :ok
         {:error, reason} -> {:error, reason}
@@ -72,8 +73,11 @@ defmodule Spark.Memory.Bronze do
 
         {:ok, entries}
 
-      {:error, :enoent} -> {:ok, []}
-      {:error, reason} -> {:error, reason}
+      {:error, :enoent} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -101,8 +105,12 @@ defmodule Spark.Memory.Bronze do
   @spec handle_event(map(), String.t()) :: :ok | :skipped | {:error, term()}
   def handle_event(%Spark.Types.Event{} = event, session_id) do
     cond do
-      not bronze_enabled?() -> :skipped
-      event.type not in interesting_events() -> :skipped
+      not bronze_enabled?() ->
+        :skipped
+
+      event.type not in interesting_events() ->
+        :skipped
+
       true ->
         append(session_id, %{
           type: event.type,
@@ -126,6 +134,7 @@ defmodule Spark.Memory.Bronze do
   end
 
   @doc "Returns whether Bronze logging is enabled."
+  @spec bronze_enabled?() :: boolean()
   def bronze_enabled? do
     Config.get([:memory, :bronze_enabled], true) in [true, "true"]
   end

@@ -62,6 +62,7 @@ defmodule Spark.HotReload.ValidatorTest do
   describe "validate_tool/1" do
     test "valid tool file passes", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "my_tool.ex")
+
       File.write!(path, """
       defmodule Spark.HotReload.ValidatorTest.MyTool do
         def name, do: "my_tool"
@@ -81,6 +82,7 @@ defmodule Spark.HotReload.ValidatorTest do
 
     test "tool without required callbacks rejected", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "bad_tool.ex")
+
       File.write!(path, """
       defmodule Spark.HotReload.ValidatorTest.BadTool do
         def name, do: "bad_tool"
@@ -95,6 +97,7 @@ defmodule Spark.HotReload.ValidatorTest do
 
     test "tool with invalid risk rejected", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "invalid_risk_tool.ex")
+
       File.write!(path, """
       defmodule Spark.HotReload.ValidatorTest.InvalidRiskTool do
         def name, do: "invalid_risk"

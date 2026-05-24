@@ -48,7 +48,8 @@ defmodule Spark.Config do
     "dispatcher" => %{
       "max_concurrency" => 3,
       "default_task_timeout_ms" => 300_000,
-      "max_retries" => 2
+      "max_retries" => 2,
+      "worker_module" => "Spark.Worker"
     },
     "tools" => %{
       "shell_timeout_ms" => 30_000,
@@ -59,6 +60,9 @@ defmodule Spark.Config do
       "mode" => "dev",
       "poll_interval_ms" => 1000,
       "targets" => ["prompts", "tools", "config", "policy", "guidance"]
+    },
+    "streaming" => %{
+      "adapter" => "direct"
     },
     "memory" => %{
       "bronze_enabled" => true,
@@ -73,6 +77,7 @@ defmodule Spark.Config do
   Returns the Spark home directory path.
   Priority: Application env :home_dir > SPARK_HOME env > ~/.spark
   """
+  @spec home_dir() :: String.t()
   def home_dir do
     cond do
       dir = Application.get_env(:spark, :home_dir) -> dir
@@ -84,6 +89,7 @@ defmodule Spark.Config do
   @doc """
   Returns the default config map.
   """
+  @spec default_config() :: map()
   def default_config, do: @default_config
 
   @doc """
@@ -91,6 +97,7 @@ defmodule Spark.Config do
   Writes the default config.json if one does not exist.
   Idempotent — safe to call multiple times.
   """
+  @spec ensure_home!() :: :ok
   def ensure_home! do
     home = home_dir()
     File.mkdir_p!(home)
@@ -100,6 +107,7 @@ defmodule Spark.Config do
     end
 
     config_path = config_path()
+
     unless File.exists?(config_path) do
       write_config!(@default_config)
     end
@@ -110,6 +118,7 @@ defmodule Spark.Config do
   @doc """
   Returns the path to config.json.
   """
+  @spec config_path() :: String.t()
   def config_path do
     Path.join(home_dir(), "config.json")
   end
@@ -118,6 +127,7 @@ defmodule Spark.Config do
   Returns the current runtime config map.
   Starts the config agent if not running.
   """
+  @spec runtime_config() :: map()
   def runtime_config do
     ensure_agent_started()
     Agent.get(__MODULE__, & &1)
@@ -127,6 +137,7 @@ defmodule Spark.Config do
   Gets a config value by key (string or list of strings for nested access).
   Returns nil if key not found.
   """
+  @spec get(String.t() | [String.t() | atom()] | atom(), term()) :: term()
   def get(key), do: get(key, nil)
 
   @doc """
@@ -150,8 +161,10 @@ defmodule Spark.Config do
   @doc """
   Updates a config value by key (string or list of strings for nested access).
   """
+  @spec put(String.t() | [String.t() | atom()] | atom(), term()) :: :ok
   def put(key, value) when is_list(key) do
     ensure_agent_started()
+
     Agent.update(__MODULE__, fn config ->
       put_nested(config, key, value)
     end)
@@ -170,6 +183,8 @@ defmodule Spark.Config do
   Updates a config value and persists the full runtime config to config.json.
   Returns :ok or {:error, reason}. On write failure, the in-memory config is left unchanged.
   """
+  @spec put_persistent(String.t() | [String.t() | atom()] | atom(), term()) ::
+          :ok | {:error, term()}
   def put_persistent(key, value) when is_list(key) do
     ensure_agent_started()
 
@@ -197,6 +212,7 @@ defmodule Spark.Config do
   Returns {:ok, config} on success, {:error, reason} on failure.
   Does not crash on invalid config — keeps previous config on error.
   """
+  @spec reload() :: {:ok, map()} | {:error, term()}
   def reload do
     case read_config_file() do
       {:ok, new_config} ->
@@ -212,13 +228,19 @@ defmodule Spark.Config do
   @doc """
   Starts the config Agent. Called automatically by ensure_home!/0 and runtime_config/0.
   """
+  @spec start_link(term()) :: {:ok, pid()} | {:error, term()}
   def start_link(_opts \\ []) do
+    # Self-check: Process.whereis(__MODULE__) is the correct pattern for
+    # named singleton Agents — not session-scoped, so Registry adds no
+    # value here. (spark-ard.19)
     case Process.whereis(__MODULE__) do
       nil ->
-        initial = case read_config_file() do
-          {:ok, config} -> config
-          {:error, _} -> @default_config
-        end
+        initial =
+          case read_config_file() do
+            {:ok, config} -> config
+            {:error, _} -> @default_config
+          end
+
         Agent.start_link(fn -> initial end, name: __MODULE__)
 
       pid ->
@@ -251,6 +273,8 @@ defmodule Spark.Config do
   # --- Private helpers ---
 
   defp ensure_agent_started do
+    # Self-check: Process.whereis(__MODULE__) is correct for named singletons
+    # (not session-scoped). Registry lookup adds no value here. (spark-ard.19)
     case Process.whereis(__MODULE__) do
       nil ->
         # Start agent synchronously for the calling process
@@ -258,6 +282,7 @@ defmodule Spark.Config do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
         end
+
       _pid ->
         :ok
     end
@@ -303,6 +328,7 @@ defmodule Spark.Config do
   end
 
   defp get_nested(config, [], _default), do: config
+
   defp get_nested(config, [key | rest], default) do
     case Map.fetch(config, key) do
       {:ok, value} when is_map(value) and rest != [] -> get_nested(value, rest, default)
@@ -320,6 +346,4 @@ defmodule Spark.Config do
     inner = Map.get(config, key, %{})
     Map.put(config, key, put_nested(inner, rest, value))
   end
-
-
 end

@@ -5,10 +5,12 @@ defmodule Spark.FakeWorker.Crash do
 
   use GenServer
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
   end
 
+  @spec child_spec(keyword()) :: map()
   def child_spec(opts) do
     %{
       id: __MODULE__,

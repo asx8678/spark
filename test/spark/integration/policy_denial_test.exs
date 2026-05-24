@@ -43,7 +43,8 @@ defmodule Spark.Integration.PolicyDenialTest do
     # Register the bash tool for ToolRunner tests
     try do
       Spark.ToolRegistry.register(Spark.Tools.Bash, replace: true)
-    catch :exit, _ -> :ok
+    catch
+      :exit, _ -> :ok
     end
 
     MockProvider.clear(self())
@@ -64,7 +65,13 @@ defmodule Spark.Integration.PolicyDenialTest do
   # --- Helpers ---
 
   defp make_task(opts \\ %{}) do
-    defaults = %{id: "policy_t1", plan_id: "policy_plan", title: "Test task", description: "Do stuff"}
+    defaults = %{
+      id: "policy_t1",
+      plan_id: "policy_plan",
+      title: "Test task",
+      description: "Do stuff"
+    }
+
     Task.new(Map.merge(defaults, opts))
   end
 
@@ -175,39 +182,45 @@ defmodule Spark.Integration.PolicyDenialTest do
         if n == 0 do
           send(test_pid, :first_call)
           # Return a shell tool call — will be blocked by policy
-          {:ok, %{
-            id: "chatcmpl-test",
-            model: "mock",
-            choices: [%{
-              message: %{
-                role: "assistant",
-                content: nil,
-                tool_calls: [
-                  %{
-                    id: "tc1",
-                    type: "function",
-                    function: %{name: "shell", arguments: %{command: "whoami"}}
-                  }
-                ]
-              }
-            }],
-            usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-          }}
+          {:ok,
+           %{
+             id: "chatcmpl-test",
+             model: "mock",
+             choices: [
+               %{
+                 message: %{
+                   role: "assistant",
+                   content: nil,
+                   tool_calls: [
+                     %{
+                       id: "tc1",
+                       type: "function",
+                       function: %{name: "shell", arguments: %{command: "whoami"}}
+                     }
+                   ]
+                 }
+               }
+             ],
+             usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+           }}
         else
           send(test_pid, :second_call)
-          {:ok, %{
-            id: "chatcmpl-test",
-            model: "mock",
-            choices: [%{message: %{role: "assistant", content: "Proceeding without shell"}}],
-            usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-          }}
+
+          {:ok,
+           %{
+             id: "chatcmpl-test",
+             model: "mock",
+             choices: [%{message: %{role: "assistant", content: "Proceeding without shell"}}],
+             usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+           }}
         end
       end
 
       task = make_task()
       task_id = task.id
       EventBus.subscribe("spark:task:#{task_id}")
-      Process.sleep(10)  # Allow subscription to propagate
+      # Allow subscription to propagate
+      Process.sleep(10)
 
       {:ok, pid} =
         Worker.start_link(
@@ -224,8 +237,18 @@ defmodule Spark.Integration.PolicyDenialTest do
       assert_receive :second_call, 2000
 
       # Worker should complete successfully despite the policy denial
-      assert_receive %Event{type: :task_completed, task_id: ^task_id}, 2000
+      # (async LLM calls may need a moment for the result to be processed)
+      assert_receive %Event{type: :task_completed, task_id: ^task_id}, 5000
 
+      # Wait for the worker process to terminate
+      if Process.alive?(pid) do
+        ref = Process.monitor(pid)
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _} -> :ok
+        after
+          3000 -> :ok
+        end
+      end
       refute Process.alive?(pid)
     end
 
@@ -235,24 +258,27 @@ defmodule Spark.Integration.PolicyDenialTest do
       # complete (even if with a failure result), not crash
       llm_fn = fn :worker, _msgs, _opts ->
         # Always return a blocked tool call
-        {:ok, %{
-          id: "chatcmpl-test",
-          model: "mock",
-          choices: [%{
-            message: %{
-              role: "assistant",
-              content: nil,
-              tool_calls: [
-                %{
-                  id: "tc1",
-                  type: "function",
-                  function: %{name: "shell", arguments: %{command: "whoami"}}
-                }
-              ]
-            }
-          }],
-          usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-        }}
+        {:ok,
+         %{
+           id: "chatcmpl-test",
+           model: "mock",
+           choices: [
+             %{
+               message: %{
+                 role: "assistant",
+                 content: nil,
+                 tool_calls: [
+                   %{
+                     id: "tc1",
+                     type: "function",
+                     function: %{name: "shell", arguments: %{command: "whoami"}}
+                   }
+                 ]
+               }
+             }
+           ],
+           usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+         }}
       end
 
       task = make_task()
@@ -269,7 +295,7 @@ defmodule Spark.Integration.PolicyDenialTest do
 
       # Worker will loop through tool calls that get denied, eventually hitting max iterations
       # It should NOT crash — it should return a task_failed event
-      assert_receive %Event{type: :task_started}, 500
+      assert_receive %Event{type: :worker_started}, 500
 
       receive do
         %Event{type: type, task_id: ^task_id} when type in [:task_completed, :task_failed] ->
@@ -307,8 +333,4 @@ defmodule Spark.Integration.PolicyDenialTest do
       assert {:error, {:blocked_by_policy, "web_fetch"}} = result
     end
   end
-
-
-
-
 end

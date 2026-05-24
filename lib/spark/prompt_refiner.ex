@@ -38,14 +38,14 @@ defmodule Spark.PromptRefiner do
   Returns `{:ok, refinement}` or `{:error, reason}`.
   """
   @spec refine(String.t(), atom(), keyword()) :: {:ok, refinement()} | {:error, term()}
-  def refine(session_id, prompt_key, opts \\ []) when prompt_key in [:orchestrator, :worker, :refiner] do
+  def refine(session_id, prompt_key, opts \\ [])
+      when prompt_key in [:orchestrator, :worker, :refiner] do
     mock_llm? = Keyword.get(opts, :mock_llm, false)
 
     with {:ok, entries} <- Bronze.read(session_id),
          {:ok, analysis} <- analyze_failures(entries, mock_llm?),
          {:ok, suggestions} <- generate_suggestions(analysis, prompt_key, mock_llm?),
          {:ok, candidate} <- create_candidate(prompt_key, suggestions, mock_llm?) do
-
       current = Store.get(prompt_key)
       current_version = Store.version(prompt_key)
 
@@ -114,7 +114,9 @@ defmodule Spark.PromptRefiner do
 
   defp analyze_failures(entries, true = _mock) do
     failures = filter_failures(entries)
-    {:ok, "Found #{length(failures)} failure events. Mock analysis: failures detected in tool execution and task completion."}
+
+    {:ok,
+     "Found #{length(failures)} failure events. Mock analysis: failures detected in tool execution and task completion."}
   end
 
   defp analyze_failures(entries, false) do
@@ -122,7 +124,11 @@ defmodule Spark.PromptRefiner do
     failure_text = failures |> Enum.map(&Jason.encode!/1) |> Enum.join("\n")
 
     messages = [
-      %{role: "system", content: "Analyze these execution failures and identify root causes. Be specific and actionable."},
+      %{
+        role: "system",
+        content:
+          "Analyze these execution failures and identify root causes. Be specific and actionable."
+      },
       %{role: "user", content: "Failures:\n#{failure_text}"}
     ]
 
@@ -137,23 +143,29 @@ defmodule Spark.PromptRefiner do
   end
 
   defp generate_suggestions(_analysis, prompt_key, true = _mock) do
-    {:ok, [
-      "Consider adding explicit error handling instructions for #{prompt_key}",
-      "Add examples of common failure patterns and recovery steps"
-    ]}
+    {:ok,
+     [
+       "Consider adding explicit error handling instructions for #{prompt_key}",
+       "Add examples of common failure patterns and recovery steps"
+     ]}
   end
 
   defp generate_suggestions(analysis, prompt_key, false) do
     current = Store.get(prompt_key)
 
     messages = [
-      %{role: "system", content: "Given this failure analysis and current prompt, suggest 3-5 specific improvements. Return as a JSON array of strings."},
+      %{
+        role: "system",
+        content:
+          "Given this failure analysis and current prompt, suggest 3-5 specific improvements. Return as a JSON array of strings."
+      },
       %{role: "user", content: "Analysis:\n#{analysis}\n\nCurrent prompt:\n#{current}"}
     ]
 
     case Spark.LLM.Client.complete(:prompt_refiner, messages, %{}) do
       {:ok, response} ->
         content = extract_content(response)
+
         case Jason.decode(content) do
           {:ok, list} when is_list(list) -> {:ok, list}
           {:error, _} -> {:ok, [content]}
@@ -176,8 +188,15 @@ defmodule Spark.PromptRefiner do
     suggestions_text = Enum.map(suggestions, fn s -> "- #{s}" end) |> Enum.join("\n")
 
     messages = [
-      %{role: "system", content: "Rewrite the given prompt incorporating these improvements. Output the full new prompt only."},
-      %{role: "user", content: "Current prompt:\n#{current}\n\nImprovements:\n#{suggestions_text}"}
+      %{
+        role: "system",
+        content:
+          "Rewrite the given prompt incorporating these improvements. Output the full new prompt only."
+      },
+      %{
+        role: "user",
+        content: "Current prompt:\n#{current}\n\nImprovements:\n#{suggestions_text}"
+      }
     ]
 
     case Spark.LLM.Client.complete(:prompt_refiner, messages, %{}) do
@@ -194,7 +213,12 @@ defmodule Spark.PromptRefiner do
 
     if File.exists?(log_path) do
       # Write candidate to a temp file for PromptLab
-      tmp_path = Path.join(System.tmp_dir!(), "spark_candidate_#{prompt_key}_#{:erlang.unique_integer([:positive])}.md")
+      tmp_path =
+        Path.join(
+          System.tmp_dir!(),
+          "spark_candidate_#{prompt_key}_#{:erlang.unique_integer([:positive])}.md"
+        )
+
       File.write!(tmp_path, candidate)
 
       try do
@@ -211,6 +235,7 @@ defmodule Spark.PromptRefiner do
   end
 
   defp evaluate_recommendation(nil), do: :needs_review
+
   defp evaluate_recommendation(report) do
     if report.failure_count == 0 and report.policy_violations == 0 do
       :approve

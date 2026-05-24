@@ -22,7 +22,8 @@ defmodule Spark.OrchestratorTest do
       if pid = Process.whereis(name) do
         try do
           GenServer.stop(pid, :shutdown)
-        catch :exit, _ -> :ok
+        catch
+          :exit, _ -> :ok
         end
       end
     end
@@ -36,7 +37,8 @@ defmodule Spark.OrchestratorTest do
       for name <- [Spark.Orchestrator, Spark.Dispatcher] do
         try do
           if pid = Process.whereis(name), do: GenServer.stop(pid, :shutdown)
-        catch :exit, _ -> :ok
+        catch
+          :exit, _ -> :ok
         end
       end
 
@@ -82,7 +84,26 @@ defmodule Spark.OrchestratorTest do
      %{
        id: "chatcmpl-test",
        model: "mock",
-       choices: [%{message: %{role: "assistant", content: "Here is the plan:\n```json\n#{json}\n```"}}],
+       choices: [
+         %{message: %{role: "assistant", content: "Here is the plan:\n```json\n#{json}\n```"}}
+       ],
+       usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+     }}
+  end
+
+  defp empty_tasks_response do
+    json =
+      Jason.encode!(%{
+        "user_goal" => "test goal",
+        "summary" => "A plan with no tasks",
+        "tasks" => []
+      })
+
+    {:ok,
+     %{
+       id: "chatcmpl-empty",
+       model: "mock",
+       choices: [%{message: %{role: "assistant", content: "```json\n#{json}\n```"}}],
        usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
      }}
   end
@@ -92,7 +113,14 @@ defmodule Spark.OrchestratorTest do
      %{
        id: "chatcmpl-review",
        model: "mock",
-       choices: [%{message: %{role: "assistant", content: "All tasks completed successfully. No further action needed."}}],
+       choices: [
+         %{
+           message: %{
+             role: "assistant",
+             content: "All tasks completed successfully. No further action needed."
+           }
+         }
+       ],
        usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
      }}
   end
@@ -114,15 +142,16 @@ defmodule Spark.OrchestratorTest do
     end
 
     test "returns error on unparseable LLM response" do
-      _pid = start_orchestrator_with_mocks([
-        {:ok,
-         %{
-           id: "bad",
-           model: "mock",
-           choices: [%{message: %{role: "assistant", content: "I don't know"}}],
-           usage: %{prompt_tokens: 1, completion_tokens: 1, total_tokens: 2}
-         }}
-      ])
+      _pid =
+        start_orchestrator_with_mocks([
+          {:ok,
+           %{
+             id: "bad",
+             model: "mock",
+             choices: [%{message: %{role: "assistant", content: "I don't know"}}],
+             usage: %{prompt_tokens: 1, completion_tokens: 1, total_tokens: 2}
+           }}
+        ])
 
       assert {:error, {:plan_parse, :no_json_in_response}} = Orchestrator.run("Do something")
     end
@@ -132,13 +161,30 @@ defmodule Spark.OrchestratorTest do
 
       {:ok, _plan} = Orchestrator.run("Build something")
 
-      assert {:error, {:invalid_phase, :awaiting_approval}} = Orchestrator.run("Build another thing")
+      assert {:error, {:invalid_phase, :awaiting_approval}} =
+               Orchestrator.run("Build another thing")
     end
 
     test "returns error on LLM failure" do
       _pid = start_orchestrator_with_mocks([{:error, :timeout}])
 
       assert {:error, {:llm_error, :timeout}} = Orchestrator.run("Do something")
+    end
+
+    test "retries once when LLM returns empty tasks then succeeds on retry" do
+      _pid = start_orchestrator_with_mocks([empty_tasks_response(), plan_response(2)])
+
+      assert {:ok, plan} = Orchestrator.run("Do something")
+      assert %Plan{} = plan
+      assert length(plan.tasks) == 2
+      assert plan.approval_status == :awaiting_approval
+    end
+
+    test "fails after retry when LLM persistently returns empty tasks" do
+      _pid = start_orchestrator_with_mocks([empty_tasks_response(), empty_tasks_response()])
+
+      assert {:error, {:plan_validation, errors}} = Orchestrator.run("Do something")
+      assert {:tasks, "must not be empty"} in errors
     end
   end
 
@@ -213,7 +259,8 @@ defmodule Spark.OrchestratorTest do
     test "returns error when in wrong phase" do
       _pid = start_orchestrator_with_mocks([])
 
-      assert {:error, {:invalid_phase, :awaiting_input}} = Orchestrator.modify_plan("any_id", "Change it")
+      assert {:error, {:invalid_phase, :awaiting_input}} =
+               Orchestrator.modify_plan("any_id", "Change it")
     end
   end
 
@@ -226,17 +273,19 @@ defmodule Spark.OrchestratorTest do
       {:ok, plan} = Orchestrator.run("Build something")
       {:ok, _approved} = Orchestrator.approve_plan(plan.id)
 
-      result1 = WorkerResult.success(%{
-        task_id: "task_1",
-        worker_id: "w1",
-        summary: "Task 1 done"
-      })
+      result1 =
+        WorkerResult.success(%{
+          task_id: "task_1",
+          worker_id: "w1",
+          summary: "Task 1 done"
+        })
 
-      result2 = WorkerResult.success(%{
-        task_id: "task_2",
-        worker_id: "w2",
-        summary: "Task 2 done"
-      })
+      result2 =
+        WorkerResult.success(%{
+          task_id: "task_2",
+          worker_id: "w2",
+          summary: "Task 2 done"
+        })
 
       Orchestrator.task_completed(result1)
       Orchestrator.task_completed(result2)
@@ -255,18 +304,20 @@ defmodule Spark.OrchestratorTest do
       {:ok, plan} = Orchestrator.run("Build something")
       {:ok, _approved} = Orchestrator.approve_plan(plan.id)
 
-      result1 = WorkerResult.success(%{
-        task_id: "task_1",
-        worker_id: "w1",
-        summary: "Task 1 done"
-      })
+      result1 =
+        WorkerResult.success(%{
+          task_id: "task_1",
+          worker_id: "w1",
+          summary: "Task 1 done"
+        })
 
-      result2 = WorkerResult.failure(%{
-        task_id: "task_2",
-        worker_id: "w2",
-        summary: "Task 2 failed",
-        errors: [%{reason: "something broke"}]
-      })
+      result2 =
+        WorkerResult.failure(%{
+          task_id: "task_2",
+          worker_id: "w2",
+          summary: "Task 2 failed",
+          errors: [%{reason: "something broke"}]
+        })
 
       Orchestrator.task_completed(result1)
       Orchestrator.task_failed(result2)
@@ -285,11 +336,12 @@ defmodule Spark.OrchestratorTest do
       {:ok, plan} = Orchestrator.run("Build something")
       {:ok, _approved} = Orchestrator.approve_plan(plan.id)
 
-      result1 = WorkerResult.success(%{
-        task_id: "task_1",
-        worker_id: "w1",
-        summary: "Task 1 done"
-      })
+      result1 =
+        WorkerResult.success(%{
+          task_id: "task_1",
+          worker_id: "w1",
+          summary: "Task 1 done"
+        })
 
       Orchestrator.task_completed(result1)
 
@@ -307,11 +359,12 @@ defmodule Spark.OrchestratorTest do
       {:ok, plan} = Orchestrator.run("Build something")
       {:ok, _approved} = Orchestrator.approve_plan(plan.id)
 
-      result = WorkerResult.success(%{
-        task_id: "task_1",
-        worker_id: "w1",
-        summary: "All done"
-      })
+      result =
+        WorkerResult.success(%{
+          task_id: "task_1",
+          worker_id: "w1",
+          summary: "All done"
+        })
 
       Orchestrator.task_completed(result)
       wait_for_phase(:completed, 500)
@@ -338,6 +391,33 @@ defmodule Spark.OrchestratorTest do
       state_after = Orchestrator.get_state()
       assert state_after.prompt_version != original_version
       assert state_after.cached_prefix != []
+    end
+
+    test "prompt_reloaded loads the new prompt content from dynamic store" do
+      unless Process.whereis(Spark.Prompt.Store) do
+        Spark.Prompt.Store.start_link()
+      end
+
+      _pid = start_orchestrator_with_mocks([plan_response()])
+
+      # Write a custom prompt to the store
+      custom_prompt_text = "This is a custom test prompt text: #{:erlang.unique_integer()}"
+      {:ok, _} = Spark.Prompt.Store.write(:orchestrator, custom_prompt_text)
+
+      # Publish prompt_reloaded event
+      event = Event.hot_reload(:prompt_reloaded, %{path: "/prompts/orchestrator.md"})
+      EventBus.publish("spark:hot_reload", event)
+
+      Process.sleep(50)
+
+      # Verify Orchestrator now uses the new prompt in its cached prefix
+      state = Orchestrator.get_state()
+      [%{role: "system", content: content}] = state.cached_prefix
+      assert content == custom_prompt_text
+
+      # Verify version matches
+      expected_version = Spark.Prompt.Store.version(:orchestrator)
+      assert state.prompt_version == expected_version
     end
 
     test "config_reloaded updates model" do
@@ -426,12 +506,65 @@ defmodule Spark.OrchestratorTest do
     test "all_results/1 merges completed and failed" do
       state = State.new(session_id: "test")
 
-      state = State.add_result(state, %WorkerResult{task_id: "t1", worker_id: "w1", summary: "ok"})
-      state = State.add_failed(state, %WorkerResult{task_id: "t2", worker_id: "w2", summary: "fail", status: :failure, errors: [%{reason: "x"}]})
+      state =
+        State.add_result(state, %WorkerResult{task_id: "t1", worker_id: "w1", summary: "ok"})
+
+      state =
+        State.add_failed(state, %WorkerResult{
+          task_id: "t2",
+          worker_id: "w2",
+          summary: "fail",
+          status: :failure,
+          errors: [%{reason: "x"}]
+        })
 
       all = State.all_results(state)
       assert Map.has_key?(all, "t1")
       assert Map.has_key?(all, "t2")
+    end
+
+    test "add_history/2 prepends entry (newest-first)" do
+      state = State.new(session_id: "test")
+      state = State.add_history(state, %{role: "user", content: "first"})
+      state = State.add_history(state, %{role: "user", content: "second"})
+
+      # Newest-first: "second" is at the head
+      assert hd(state.history) == %{role: "user", content: "second"}
+      assert length(state.history) == 2
+    end
+
+    test "add_history/2 respects max_history cap" do
+      state = State.new(session_id: "test", max_history: 3)
+      state = State.add_history(state, %{role: "user", content: "a"})
+      state = State.add_history(state, %{role: "user", content: "b"})
+      state = State.add_history(state, %{role: "user", content: "c"})
+      state = State.add_history(state, %{role: "user", content: "d"})
+
+      assert length(state.history) == 3
+      # Newest-first: d, c, b — "a" was evicted
+      assert state.history == [
+               %{role: "user", content: "d"},
+               %{role: "user", content: "c"},
+               %{role: "user", content: "b"}
+             ]
+    end
+
+    test "history_chronological/1 reverses to oldest-first" do
+      state = State.new(session_id: "test")
+      state = State.add_history(state, %{role: "user", content: "first"})
+      state = State.add_history(state, %{role: "user", content: "second"})
+
+      chronological = State.history_chronological(state)
+
+      assert chronological == [
+               %{role: "user", content: "first"},
+               %{role: "user", content: "second"}
+             ]
+    end
+
+    test "default max_history is 50" do
+      state = State.new(session_id: "test")
+      assert state.max_history == 50
     end
   end
 
@@ -444,9 +577,14 @@ defmodule Spark.OrchestratorTest do
 
   defp do_wait_for_phase(phase, deadline) do
     state = Orchestrator.get_state()
+
     cond do
-      state.phase == phase -> :ok
-      System.monotonic_time(:millisecond) >= deadline -> :timeout
+      state.phase == phase ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        :timeout
+
       true ->
         Process.sleep(10)
         do_wait_for_phase(phase, deadline)

@@ -20,16 +20,19 @@ defmodule Spark.PolicyTest do
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
       EventBus.clear_hooks()
+
       try do
         if pid = Process.whereis(Spark.Config), do: Agent.stop(pid)
       catch
         :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Policy), do: Agent.stop(pid)
       catch
         :exit, _ -> :ok
       end
+
       File.rm_rf!(tmp_dir)
     end)
 
@@ -66,7 +69,11 @@ defmodule Spark.PolicyTest do
 
   describe "validate_plan/2 (spark-04w.1)" do
     test "valid plan with approved status passes" do
-      plan = make_plan() |> Plan.awaiting_approval() |> then(fn p -> %{p | approval_status: :approved} end)
+      plan =
+        make_plan()
+        |> Plan.awaiting_approval()
+        |> then(fn p -> %{p | approval_status: :approved} end)
+
       assert :ok = Policy.validate_plan(plan)
     end
 
@@ -80,10 +87,11 @@ defmodule Spark.PolicyTest do
       plan = make_plan(task: task)
       # Draft plan with high-risk task should fail when approval is required
       assert {:error, errors} = Policy.validate_plan(plan)
+
       assert Enum.any?(errors, fn
-        {:requires_approval, _} -> true
-        _ -> false
-      end)
+               {:requires_approval, _} -> true
+               _ -> false
+             end)
     end
 
     test "approved plan with high-risk task passes" do
@@ -108,20 +116,22 @@ defmodule Spark.PolicyTest do
     test "high-risk task requires approval" do
       task = make_task(%{risk: :high})
       assert {:error, errors} = Policy.validate_task(task)
+
       assert Enum.any?(errors, fn
-        {:high_risk_requires_approval, _} -> true
-        _ -> false
-      end)
+               {:high_risk_requires_approval, _} -> true
+               _ -> false
+             end)
     end
 
     test "task exceeding max_write_paths fails" do
       paths = Enum.map(1..20, &"/tmp/file#{&1}")
       task = make_task(%{write_paths: paths})
       assert {:error, errors} = Policy.validate_task(task)
+
       assert Enum.any?(errors, fn
-        {:too_many_write_paths, _} -> true
-        _ -> false
-      end)
+               {:too_many_write_paths, _} -> true
+               _ -> false
+             end)
     end
   end
 
@@ -138,28 +148,33 @@ defmodule Spark.PolicyTest do
 
     test "high-risk tool blocked when allow_shell is false" do
       state = %{task_id: "t1", task: make_task()}
+
       assert {:error, {:high_risk_blocked, "shell"}} =
-        Policy.validate_tool_call("shell", %{}, state)
+               Policy.validate_tool_call("shell", %{}, state)
     end
 
     test "critical tool always blocked by default" do
       state = %{task_id: "t1", task: make_task()}
+
       assert {:error, {:critical_blocked, "rm_rf"}} =
-        Policy.validate_tool_call("rm_rf", %{}, state)
+               Policy.validate_tool_call("rm_rf", %{}, state)
     end
 
     test "medium-risk tool without task_id fails" do
-      state = %{worker_id: "w1"}  # no task_id
+      # no task_id
+      state = %{worker_id: "w1"}
+
       assert {:error, {:missing_task_id, _}} =
-        Policy.validate_tool_call("write_file", %{}, state)
+               Policy.validate_tool_call("write_file", %{}, state)
     end
 
     test "blocked tool is rejected" do
       write_policy(%{"blocked_tools" => ["grep"]})
       restart_policy_agent()
       state = %{task_id: "t1", task: make_task()}
+
       assert {:error, {:blocked_by_policy, "grep"}} =
-        Policy.validate_tool_call("grep", %{}, state)
+               Policy.validate_tool_call("grep", %{}, state)
     end
 
     test "allowlist blocks unlisted tools" do
@@ -167,8 +182,9 @@ defmodule Spark.PolicyTest do
       restart_policy_agent()
       state = %{task_id: "t1", task: make_task()}
       assert :ok = Policy.validate_tool_call("read_file", %{}, state)
+
       assert {:error, {:not_in_allowlist, "write_file"}} =
-        Policy.validate_tool_call("write_file", %{}, state)
+               Policy.validate_tool_call("write_file", %{}, state)
     end
   end
 
@@ -221,16 +237,18 @@ defmodule Spark.PolicyTest do
 
   describe "approval gate (spark-04w.2)" do
     test "write tool without task_id is denied" do
-      state = %{worker_id: "w1"}  # missing task_id
+      # missing task_id
+      state = %{worker_id: "w1"}
+
       assert {:error, {:missing_task_id, _}} =
-        Policy.validate_tool_call("write_file", %{}, state)
+               Policy.validate_tool_call("write_file", %{}, state)
     end
 
     test "shell tool blocked unless policy allows" do
       state = %{task_id: "t1", task: make_task()}
       # Default: allow_shell = false
       assert {:error, {:high_risk_blocked, "shell"}} =
-        Policy.validate_tool_call("shell", %{}, state)
+               Policy.validate_tool_call("shell", %{}, state)
 
       # Enable shell
       write_policy(%{"allow_shell" => true})

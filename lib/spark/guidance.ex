@@ -42,6 +42,7 @@ defmodule Spark.Guidance do
   @doc """
   Starts the Guidance GenServer.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
@@ -307,6 +308,7 @@ defmodule Spark.Guidance do
 
   defp parse_yaml_value("true"), do: true
   defp parse_yaml_value("false"), do: false
+
   defp parse_yaml_value(value) do
     case Integer.parse(value) do
       {int, ""} -> int

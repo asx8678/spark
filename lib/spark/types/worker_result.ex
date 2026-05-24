@@ -46,6 +46,7 @@ defmodule Spark.Types.WorkerResult do
   @doc """
   Creates a success result.
   """
+  @spec success(map()) :: t()
   def success(attrs) when is_map(attrs) do
     build(:success, attrs)
   end
@@ -53,6 +54,7 @@ defmodule Spark.Types.WorkerResult do
   @doc """
   Creates a failure result.
   """
+  @spec failure(map()) :: t()
   def failure(attrs) when is_map(attrs) do
     build(:failure, attrs)
   end
@@ -60,6 +62,7 @@ defmodule Spark.Types.WorkerResult do
   @doc """
   Creates a partial result.
   """
+  @spec partial(map()) :: t()
   def partial(attrs) when is_map(attrs) do
     build(:partial, attrs)
   end
@@ -73,6 +76,7 @@ defmodule Spark.Types.WorkerResult do
   @doc """
   Validates a WorkerResult struct.
   """
+  @spec validate(t()) :: :ok | {:error, [{atom(), String.t()}]}
   def validate(%__MODULE__{} = result) do
     errors = []
 
@@ -122,6 +126,7 @@ defmodule Spark.Types.WorkerResult do
   temporary, connection, 429) and no non-retryable indicators (invalid_task,
   policy_denied, forbidden, permanent).
   """
+  @spec retry_recommended?(t()) :: boolean()
   def retry_recommended?(%__MODULE__{status: :failure, errors: errors}) when errors != [] do
     retryable_indicators = ["timeout", "transient", "temporary", "connection", "429"]
     not_retryable = ["invalid_task", "policy_denied", "forbidden", "permanent"]
@@ -141,5 +146,6 @@ defmodule Spark.Types.WorkerResult do
     has_retryable and not has_non_retryable
   end
 
+  @spec retry_recommended?(term()) :: false
   def retry_recommended?(_), do: false
 end

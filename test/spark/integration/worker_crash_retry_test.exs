@@ -33,7 +33,8 @@ defmodule Spark.Integration.WorkerCrashRetryTest do
     if pid = Process.whereis(Spark.Dispatcher) do
       try do
         GenServer.stop(pid, :shutdown)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
     end
 
@@ -54,7 +55,8 @@ defmodule Spark.Integration.WorkerCrashRetryTest do
 
       try do
         if pid = Process.whereis(Spark.Dispatcher), do: GenServer.stop(pid, :shutdown)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
 
       File.rm_rf!(tmp_dir)
@@ -68,32 +70,42 @@ defmodule Spark.Integration.WorkerCrashRetryTest do
     Task.new(Map.merge(defaults, opts))
   end
 
-
-
   defp plan_response_1task do
-    tasks = [%{"id" => "task_1", "plan_id" => "auto", "title" => "Task 1", "description" => "Desc", "risk" => "low"}]
+    tasks = [
+      %{
+        "id" => "task_1",
+        "plan_id" => "auto",
+        "title" => "Task 1",
+        "description" => "Desc",
+        "risk" => "low"
+      }
+    ]
+
     json = Jason.encode!(%{"user_goal" => "test", "summary" => "Plan", "tasks" => tasks})
 
-    {:ok, %{
-      id: "chatcmpl-plan",
-      model: "mock",
-      choices: [%{message: %{role: "assistant", content: "```json\n#{json}\n```"}}],
-      usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-    }}
+    {:ok,
+     %{
+       id: "chatcmpl-plan",
+       model: "mock",
+       choices: [%{message: %{role: "assistant", content: "```json\n#{json}\n```"}}],
+       usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+     }}
   end
 
   defp review_response do
-    {:ok, %{
-      id: "chatcmpl-review",
-      model: "mock",
-      choices: [%{message: %{role: "assistant", content: "Review complete."}}],
-      usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-    }}
+    {:ok,
+     %{
+       id: "chatcmpl-review",
+       model: "mock",
+       choices: [%{message: %{role: "assistant", content: "Review complete."}}],
+       usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+     }}
   end
 
   describe "worker crash detection" do
     test "crashed worker is detected via :DOWN monitor" do
       TestHelpers.ensure_app_tree()
+
       {:ok, _pid} =
         Dispatcher.start_link(
           max_concurrency: 3,
@@ -123,6 +135,7 @@ defmodule Spark.Integration.WorkerCrashRetryTest do
   describe "retryable task is retried" do
     test "crashed worker with retries remaining gets retried" do
       TestHelpers.ensure_app_tree()
+
       {:ok, _pid} =
         Dispatcher.start_link(
           max_concurrency: 1,
@@ -175,6 +188,7 @@ defmodule Spark.Integration.WorkerCrashRetryTest do
     test "task exhausting retries is marked failed" do
       Process.flag(:trap_exit, true)
       TestHelpers.ensure_app_tree()
+
       {:ok, _pid} =
         Dispatcher.start_link(
           max_concurrency: 1,
@@ -190,7 +204,8 @@ defmodule Spark.Integration.WorkerCrashRetryTest do
       :ok = Dispatcher.enqueue("crash_plan", [task])
 
       # Should eventually get task_failed after retries exhausted
-      assert_receive %Event{type: :task_failed, task_id: "exhaust_t1", payload: %{retries: _}}, 5000
+      assert_receive %Event{type: :task_failed, task_id: "exhaust_t1", payload: %{retries: _}},
+                     5000
     end
   end
 
@@ -200,7 +215,8 @@ defmodule Spark.Integration.WorkerCrashRetryTest do
       if pid = Process.whereis(Spark.Orchestrator) do
         try do
           GenServer.stop(pid, :shutdown)
-        catch :exit, _ -> :ok
+        catch
+          :exit, _ -> :ok
         end
       end
 
@@ -229,7 +245,8 @@ defmodule Spark.Integration.WorkerCrashRetryTest do
       if pid = Process.whereis(Spark.Orchestrator) do
         try do
           GenServer.stop(pid, :shutdown)
-        catch :exit, _ -> :ok
+        catch
+          :exit, _ -> :ok
         end
       end
 
@@ -295,7 +312,9 @@ defmodule Spark.Integration.WorkerCrashRetryTest do
           worker_module: Spark.FakeWorker.Crash
         )
 
-      task = make_task("lock_t1", %{max_retries: 0, write_paths: ["/tmp/spark_lock_test/out.txt"]})
+      task =
+        make_task("lock_t1", %{max_retries: 0, write_paths: ["/tmp/spark_lock_test/out.txt"]})
+
       EventBus.subscribe("spark:task:lock_t1")
 
       :ok = Dispatcher.enqueue("crash_plan", [task])

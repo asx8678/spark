@@ -27,7 +27,8 @@ defmodule Spark.Workspace.SandboxTest do
     end
 
     test "rejects deeply nested traversal" do
-      assert {:error, :path_traversal} = Sandbox.validate_path("a/b/../../../etc/passwd", "/project")
+      assert {:error, :path_traversal} =
+               Sandbox.validate_path("a/b/../../../etc/passwd", "/project")
     end
   end
 

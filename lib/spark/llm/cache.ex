@@ -83,9 +83,9 @@ defmodule Spark.LLM.Cache do
   @spec split_static_dynamic([map()]) :: {[map()], [map()]}
   def split_static_dynamic(messages) when is_list(messages) do
     case Enum.split_while(messages, fn
-      %{role: "system", content: "[spark:dynamic_boundary]"} -> false
-      _ -> true
-    end) do
+           %{role: "system", content: "[spark:dynamic_boundary]"} -> false
+           _ -> true
+         end) do
       {static, [%{content: "[spark:dynamic_boundary]"} | dynamic]} ->
         {static, dynamic}
 
@@ -103,11 +103,12 @@ defmodule Spark.LLM.Cache do
   """
   @spec invalidate(atom(), map()) :: {:ok, map()}
   def invalidate(reason, metadata \\ %{}) do
-    {:ok, Map.merge(metadata, %{
-      invalidated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      reason: reason,
-      new_version: "v_#{:erlang.unique_integer([:positive])}"
-    })}
+    {:ok,
+     Map.merge(metadata, %{
+       invalidated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+       reason: reason,
+       new_version: "v_#{:erlang.unique_integer([:positive])}"
+     })}
   end
 
   # --- Private ---

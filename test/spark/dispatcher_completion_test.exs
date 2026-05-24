@@ -26,23 +26,29 @@ defmodule Spark.DispatcherCompletionTest do
 
     if pid = Process.whereis(Spark.Dispatcher), do: GenServer.stop(pid, :shutdown)
 
-    {:ok, _pid} = Dispatcher.start_link(
-      max_concurrency: 1,
-      session_id: "completion_session",
-      plan_id: "completion_plan"
-    )
+    {:ok, _pid} =
+      Dispatcher.start_link(
+        max_concurrency: 1,
+        session_id: "completion_session",
+        plan_id: "completion_plan"
+      )
 
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
       EventBus.clear_hooks()
+
       try do
         if pid = Process.whereis(Spark.Dispatcher), do: GenServer.stop(pid, :shutdown)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Spark.Config), do: Agent.stop(pid)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       File.rm_rf!(tmp_dir)
     end)
 
@@ -53,22 +59,24 @@ defmodule Spark.DispatcherCompletionTest do
     Task.new(Map.merge(%{plan_id: "completion_plan", title: "Task #{id}", id: id}, opts))
   end
 
-  defp await_completed_count(count, timeout \\ 2000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    spin(deadline, & &1.completed_count >= count)
-  end
-
   defp await_failed_count(count, timeout \\ 2000) do
     deadline = System.monotonic_time(:millisecond) + timeout
-    spin(deadline, & &1.failed_count >= count)
+    spin(deadline, &(&1.failed_count >= count))
   end
 
   defp spin(deadline, check) do
     status = Dispatcher.status()
+
     cond do
-      check.(status) -> status
-      System.monotonic_time(:millisecond) >= deadline -> status
-      true -> Process.sleep(20); spin(deadline, check)
+      check.(status) ->
+        status
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        status
+
+      true ->
+        Process.sleep(20)
+        spin(deadline, check)
     end
   end
 
@@ -187,7 +195,8 @@ defmodule Spark.DispatcherCompletionTest do
       assert :ok = Dispatcher.handle_worker_failed("exhaust_t1", :llm_timeout)
 
       receive do
-        %Event{type: type, task_id: "exhaust_t1"} when type in [:task_failed, :task_retried] -> :ok
+        %Event{type: type, task_id: "exhaust_t1"} when type in [:task_failed, :task_retried] ->
+          :ok
       after
         500 -> flunk("Expected task event after retry exhaustion")
       end

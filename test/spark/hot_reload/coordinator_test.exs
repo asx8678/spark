@@ -9,11 +9,13 @@ defmodule Spark.HotReload.CoordinatorTest do
     if pid = Process.whereis(Manifest) do
       GenServer.stop(pid, :shutdown)
     end
+
     {:ok, _pid} = Manifest.start_link()
 
     if pid = Process.whereis(Coordinator) do
       GenServer.stop(pid, :shutdown)
     end
+
     {:ok, _pid} = Coordinator.start_link()
 
     # Use temp dir for Spark home
@@ -35,21 +37,25 @@ defmodule Spark.HotReload.CoordinatorTest do
 
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
+
       try do
         if pid = Process.whereis(Coordinator), do: GenServer.stop(pid, :shutdown)
       catch
         :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Manifest), do: GenServer.stop(pid, :shutdown)
       catch
         :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Spark.Config), do: Agent.stop(pid)
       catch
         :exit, _ -> :ok
       end
+
       File.rm_rf!(tmp_dir)
     end)
 

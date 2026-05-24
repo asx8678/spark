@@ -8,7 +8,8 @@ defmodule Spark.MixProject do
       elixir: "~> 1.16",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      elixirc_paths: elixirc_paths(Mix.env())
+      elixirc_paths: elixirc_paths(Mix.env()),
+      dialyzer: [ignore_warnings: ".dialyzer_ignore.exs", plt_add_apps: [:mix]]
     ]
   end
 
@@ -21,11 +22,14 @@ defmodule Spark.MixProject do
 
   defp deps do
     [
+      {:finch, "~> 0.18"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:floki, "~> 0.36"},
       {:phoenix_pubsub, "~> 2.1"},
-      {:term_ui, "~> 1.0-rc"}
+      {:term_ui, "~> 1.0-rc"},
+      {:gen_stage, "~> 1.2"},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 

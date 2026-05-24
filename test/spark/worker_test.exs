@@ -18,6 +18,11 @@ defmodule Spark.WorkerTest do
     EventBus.clear_hooks()
     MockProvider.clear(self())
 
+    # Ensure ToolSupervisor is running for async LLM calls
+    unless Process.whereis(Spark.ToolSupervisor) do
+      Elixir.Task.Supervisor.start_link(name: Spark.ToolSupervisor)
+    end
+
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
       EventBus.clear_hooks()
@@ -43,42 +48,49 @@ defmodule Spark.WorkerTest do
   end
 
   defp success_response(content \\ "mock response") do
-    {:ok, %{
-      id: "chatcmpl-test",
-      model: "mock-model",
-      choices: [%{message: %{role: "assistant", content: content}}],
-      usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-    }}
+    {:ok,
+     %{
+       id: "chatcmpl-test",
+       model: "mock-model",
+       choices: [%{message: %{role: "assistant", content: content}}],
+       usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+     }}
   end
 
   defp tool_call_response do
-    {:ok, %{
-      id: "chatcmpl-test",
-      model: "mock-model",
-      choices: [
-        %{
-          message: %{
-            role: "assistant",
-            content: nil,
-            tool_calls: [
-              %{
-                id: "tc1",
-                type: "function",
-                function: %{name: "read_file", arguments: "{\"path\": \"/tmp/test\"}"}
-              }
-            ]
-          }
-        }
-      ],
-      usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
-    }}
+    {:ok,
+     %{
+       id: "chatcmpl-test",
+       model: "mock-model",
+       choices: [
+         %{
+           message: %{
+             role: "assistant",
+             content: nil,
+             tool_calls: [
+               %{
+                 id: "tc1",
+                 type: "function",
+                 function: %{name: "read_file", arguments: "{\"path\": \"/tmp/test\"}"}
+               }
+             ]
+           }
+         }
+       ],
+       usage: %{prompt_tokens: 10, completion_tokens: 5, total_tokens: 15}
+     }}
   end
 
   defp await_worker_exit(pid, timeout \\ 2000) do
     deadline = System.monotonic_time(:millisecond) + timeout
 
     if Process.alive?(pid) and System.monotonic_time(:millisecond) < deadline do
-      Process.sleep(10)
+      ref = Process.monitor(pid)
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _} -> true
+      after
+        50 -> Process.sleep(10)
+      end
       await_worker_exit(pid, deadline - System.monotonic_time(:millisecond))
     end
 
@@ -107,7 +119,7 @@ defmodule Spark.WorkerTest do
 
       assert_receive :worker_running, 500
       assert Process.alive?(pid)
-      assert_receive %Event{type: :task_started, task_id: ^task_id}, 500
+      assert_receive %Event{type: :worker_started, task_id: ^task_id}, 500
     end
 
     test "worker rejects invalid task" do
@@ -140,11 +152,11 @@ defmodule Spark.WorkerTest do
       )
 
       assert_receive %Event{
-        type: :task_started,
-        task_id: ^task_id,
-        payload: %{worker_id: _, plan_id: "p1"}
-      },
-      500
+                       type: :worker_started,
+                       task_id: ^task_id,
+                       payload: %{worker_id: _, plan_id: "p1"}
+                     },
+                     500
     end
   end
 
@@ -184,7 +196,7 @@ defmodule Spark.WorkerTest do
           llm_call_fn: fn _, _, _ -> success_response() end
         )
 
-      assert_receive %Event{type: :task_started}, 500
+      assert_receive %Event{type: :worker_started}, 500
       assert_receive %Event{type: :task_completed, task_id: ^task_id}, 1000
 
       await_worker_exit(pid)
@@ -203,7 +215,7 @@ defmodule Spark.WorkerTest do
           llm_call_fn: fn _, _, _ -> {:error, :rate_limited} end
         )
 
-      assert_receive %Event{type: :task_started}, 500
+      assert_receive %Event{type: :worker_started}, 500
       assert_receive %Event{type: :task_failed, task_id: ^task_id}, 1000
 
       await_worker_exit(pid)
@@ -240,12 +252,13 @@ defmodule Spark.WorkerTest do
 
     test "stops after max iterations" do
       empty_fn = fn _, _, _ ->
-        {:ok, %{
-          id: "empty",
-          model: "mock",
-          choices: [%{message: %{role: "assistant", content: ""}}],
-          usage: %{}
-        }}
+        {:ok,
+         %{
+           id: "empty",
+           model: "mock",
+           choices: [%{message: %{role: "assistant", content: ""}}],
+           usage: %{}
+         }}
       end
 
       task = make_task()
@@ -261,6 +274,36 @@ defmodule Spark.WorkerTest do
         )
 
       assert_receive %Event{type: :task_failed, task_id: ^task_id}, 2000
+      await_worker_exit(pid)
+    end
+
+    test "worker uses dynamic system prompt from Prompt.Store" do
+      unless Process.whereis(Spark.Prompt.Store) do
+        Spark.Prompt.Store.start_link()
+      end
+
+      # Write a custom prompt to the store
+      custom_worker_prompt = "This is a custom test worker prompt: #{:erlang.unique_integer()}"
+      {:ok, _} = Spark.Prompt.Store.write(:worker, custom_worker_prompt)
+
+      # Start worker with a mock LLM callback that captures the system message content
+      test_pid = self()
+
+      llm_fn = fn :worker, messages, _opts ->
+        system_msg = Enum.find(messages, fn msg -> msg.role == "system" end)
+        send(test_pid, {:captured_system_msg, system_msg.content})
+        success_response()
+      end
+
+      task = make_task(%{title: "Specific task title"})
+
+      {:ok, pid} =
+        Worker.start_link(task: task, session_id: "s1", plan_id: "p1", llm_call_fn: llm_fn)
+
+      assert_receive {:captured_system_msg, content}, 500
+      assert String.contains?(content, custom_worker_prompt)
+      assert String.contains?(content, "Specific task title")
+
       await_worker_exit(pid)
     end
   end
@@ -281,10 +324,12 @@ defmodule Spark.WorkerTest do
       )
 
       assert_receive %Event{
-        type: :task_completed,
-        payload: %{result: %WorkerResult{status: :success, summary: "did the thing"}}
-      },
-      1000
+                       type: :task_completed,
+                       payload: %{
+                         result: %WorkerResult{status: :success, summary: "did the thing"}
+                       }
+                     },
+                     1000
     end
 
     test "failure result includes WorkerResult with errors" do
@@ -300,13 +345,13 @@ defmodule Spark.WorkerTest do
       )
 
       assert_receive %Event{
-        type: :task_failed,
-        payload: %{
-          result: %WorkerResult{status: :failure, errors: [_ | _]},
-          reason: :connection_timeout
-        }
-      },
-      1000
+                       type: :task_failed,
+                       payload: %{
+                         result: %WorkerResult{status: :failure, errors: [_ | _]},
+                         reason: :connection_timeout
+                       }
+                     },
+                     1000
     end
   end
 
@@ -403,10 +448,12 @@ defmodule Spark.WorkerTest do
       # The task_completed event carries the captured prompt_version
       # from init — it must NOT be "v2"
       assert_receive %Event{
-        type: :task_completed,
-        payload: %{prompt_version: "unknown"}
-      },
-      2000
+                       type: :task_completed,
+                       payload: %{prompt_version: prompt_version}
+                     },
+                     2000
+
+      assert prompt_version != "v2"
     end
   end
 end

@@ -6,12 +6,21 @@ defmodule Spark.GuidanceTest do
   setup do
     # Create a temporary guidance directory
     tmp_dir = System.tmp_dir!()
-    guidance_dir = Path.join(tmp_dir, "spark_guidance_test_#{:erlang.unique_integer([:positive])}")
+
+    guidance_dir =
+      Path.join(tmp_dir, "spark_guidance_test_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(guidance_dir)
 
     # Override home dir for testing
     original_home = Application.get_env(:spark, :home_dir)
-    Application.put_env(:spark, :home_dir, Path.join(tmp_dir, "spark_home_#{:erlang.unique_integer([:positive])}"))
+
+    Application.put_env(
+      :spark,
+      :home_dir,
+      Path.join(tmp_dir, "spark_home_#{:erlang.unique_integer([:positive])}")
+    )
+
     home_dir = Application.get_env(:spark, :home_dir)
     File.mkdir_p!(Path.join(home_dir, "guidance"))
 
@@ -21,6 +30,7 @@ defmodule Spark.GuidanceTest do
       else
         Application.delete_env(:spark, :home_dir)
       end
+
       File.rm_rf!(guidance_dir)
       File.rm_rf!(home_dir)
     end)
@@ -47,7 +57,11 @@ defmodule Spark.GuidanceTest do
 
     test "parses frontmatter from guidance files", %{home_dir: home_dir} do
       guidance_path = Path.join(Path.join(home_dir, "guidance"), "after_grep.md")
-      File.write!(guidance_path, "---\ntrigger: after_grep\npriority: 10\n---\nConsider using more specific search patterns.")
+
+      File.write!(
+        guidance_path,
+        "---\ntrigger: after_grep\npriority: 10\n---\nConsider using more specific search patterns."
+      )
 
       {:ok, {rules, _version}} = Guidance.load_all()
       rule = hd(rules)
@@ -108,7 +122,12 @@ defmodule Spark.GuidanceTest do
     end
 
     test "matches truncation context", %{name: name} do
-      result = GenServer.call(name, {:select, {:ok, %{output: "big"}}, %{tool: "shell", truncated: true}})
+      result =
+        GenServer.call(
+          name,
+          {:select, {:ok, %{output: "big"}}, %{tool: "shell", truncated: true}}
+        )
+
       assert result =~ "truncated"
     end
 
@@ -139,9 +158,8 @@ defmodule Spark.GuidanceTest do
       assert length(rules) >= 1
 
       version_after = GenServer.call(name, :version)
-      # Version should change after reload (unless both are "empty")
-      # This is a soft check since hashing may vary
       assert is_binary(version_after)
+      assert version_after != version_before
     end
   end
 
@@ -187,6 +205,7 @@ defmodule Spark.GuidanceTest do
         payload: %{},
         timestamp: DateTime.utc_now()
       }
+
       send(pid, event)
       Process.sleep(50)
 

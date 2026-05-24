@@ -13,6 +13,8 @@ defmodule Spark.LLM.Client do
     - `:llm_call_failed`
   """
 
+  require Logger
+
   alias Spark.Types.Event
   alias Spark.EventBus
 
@@ -30,31 +32,44 @@ defmodule Spark.LLM.Client do
   def complete(actor_type, messages, opts \\ %{})
 
   def complete(actor_type, messages, opts) when actor_type in @actor_types do
+    Logger.metadata(actor_type: actor_type, session_id: Map.get(opts, :session_id))
     provider_mod = resolve_provider(actor_type)
     provider_opts = resolve_opts(actor_type, opts)
 
-    emit_event(:llm_call_started, %{
-      actor_type: actor_type,
-      provider: provider_name(provider_mod),
-      model: Map.get(provider_opts, :model)
-    }, opts)
+    emit_event(
+      :llm_call_started,
+      %{
+        actor_type: actor_type,
+        provider: provider_name(provider_mod),
+        model: Map.get(provider_opts, :model)
+      },
+      opts
+    )
 
     case provider_mod.complete(messages, provider_opts) do
       {:ok, response} ->
-        emit_event(:llm_call_completed, %{
-          actor_type: actor_type,
-          model: response.model,
-          usage: response.usage
-        }, opts)
+        emit_event(
+          :llm_call_completed,
+          %{
+            actor_type: actor_type,
+            model: response.model,
+            usage: response.usage
+          },
+          opts
+        )
 
         {:ok, response}
 
       {:error, reason} ->
-        emit_event(:llm_call_failed, %{
-          actor_type: actor_type,
-          provider: provider_name(provider_mod),
-          error: safe_error(reason)
-        }, opts)
+        emit_event(
+          :llm_call_failed,
+          %{
+            actor_type: actor_type,
+            provider: provider_name(provider_mod),
+            error: safe_error(reason)
+          },
+          opts
+        )
 
         {:error, reason}
     end
@@ -75,35 +90,49 @@ defmodule Spark.LLM.Client do
   @spec stream(atom(), [map()], map(), function()) :: {:ok, map()} | {:error, term()}
   def stream(actor_type, messages, opts \\ %{}, callback)
 
-  def stream(actor_type, messages, opts, callback) when actor_type in @actor_types and is_function(callback, 1) do
+  def stream(actor_type, messages, opts, callback)
+      when actor_type in @actor_types and is_function(callback, 1) do
+    Logger.metadata(actor_type: actor_type, session_id: Map.get(opts, :session_id))
     provider_mod = resolve_provider(actor_type)
     provider_opts = resolve_opts(actor_type, opts)
 
     if Spark.LLM.Provider.supports_streaming?(provider_mod) do
-      emit_event(:llm_call_started, %{
-        actor_type: actor_type,
-        provider: provider_name(provider_mod),
-        model: Map.get(provider_opts, :model),
-        streaming: true
-      }, opts)
+      emit_event(
+        :llm_call_started,
+        %{
+          actor_type: actor_type,
+          provider: provider_name(provider_mod),
+          model: Map.get(provider_opts, :model),
+          streaming: true
+        },
+        opts
+      )
 
       case provider_mod.stream(messages, provider_opts, callback) do
         {:ok, response} ->
-          emit_event(:llm_call_completed, %{
-            actor_type: actor_type,
-            model: response.model,
-            usage: response.usage,
-            streaming: true
-          }, opts)
+          emit_event(
+            :llm_call_completed,
+            %{
+              actor_type: actor_type,
+              model: response.model,
+              usage: response.usage,
+              streaming: true
+            },
+            opts
+          )
 
           {:ok, response}
 
         {:error, reason} ->
-          emit_event(:llm_call_failed, %{
-            actor_type: actor_type,
-            provider: provider_name(provider_mod),
-            error: safe_error(reason)
-          }, opts)
+          emit_event(
+            :llm_call_failed,
+            %{
+              actor_type: actor_type,
+              provider: provider_name(provider_mod),
+              error: safe_error(reason)
+            },
+            opts
+          )
 
           {:error, reason}
       end
@@ -171,9 +200,15 @@ defmodule Spark.LLM.Client do
 
   defp provider_module(provider_name) do
     case to_string(provider_name) do
-      "mock" -> Spark.LLM.MockProvider
-      "wafer" -> Spark.LLM.WaferProvider
-      "deepseek" -> Spark.LLM.WaferProvider
+      "mock" ->
+        Spark.LLM.MockProvider
+
+      "wafer" ->
+        Spark.LLM.WaferProvider
+
+      "deepseek" ->
+        Spark.LLM.WaferProvider
+
       other ->
         # Try to resolve as module name
         try do
@@ -201,8 +236,16 @@ defmodule Spark.LLM.Client do
   end
 
   defp resolve_api_key(provider) when is_binary(provider) do
-    key = :"#{provider}_api_key"
-    Spark.Config.Secrets.get_secret(key) || Spark.Config.Secrets.get_secret(:wafer_api_key) || ""
+    key_str = "#{provider}_api_key"
+
+    # Try provider-specific key (as string — Secrets accepts strings),
+    # then fall back to wafer_api_key, then empty string.
+    # We use string keys because Secrets.get_secret/1 accepts both
+    # atoms and strings (via to_string/1), and String.to_existing_atom/1
+    # fails for keys that haven't been referenced as atoms yet.
+    Spark.Config.Secrets.get_secret(key_str) ||
+      Spark.Config.Secrets.get_secret(:wafer_api_key) ||
+      ""
   end
 
   defp resolve_api_key(_), do: Spark.Config.Secrets.get_secret(:wafer_api_key) || ""

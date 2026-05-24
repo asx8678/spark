@@ -18,6 +18,7 @@ defmodule Spark.HotReload.Manifest do
   @doc """
   Starts the Manifest GenServer.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
@@ -28,6 +29,7 @@ defmodule Spark.HotReload.Manifest do
   `component_map` must include `:component` and `:name` keys.
   Additional fields: `:module`, `:path`, `:version`, `:hash`, `:metadata`.
   """
+  @spec register(map()) :: {:ok, map()} | {:error, term()}
   def register(component_map) do
     GenServer.call(__MODULE__, {:register, component_map})
   end
@@ -36,6 +38,7 @@ defmodule Spark.HotReload.Manifest do
   Updates an existing component. Moves current entry to `previous`
   and stores the new metadata as active.
   """
+  @spec update({atom(), atom() | String.t()}, map()) :: {:ok, map()} | {:error, term()}
   def update(component_key, metadata) do
     GenServer.call(__MODULE__, {:update, component_key, metadata})
   end
@@ -44,6 +47,7 @@ defmodule Spark.HotReload.Manifest do
   Gets the active version of a component by key.
   Returns nil if not found.
   """
+  @spec get({atom(), atom() | String.t()}) :: map() | nil
   def get(component_key) do
     case :ets.lookup(@table, component_key) do
       [{^component_key, entry}] -> entry
@@ -54,6 +58,7 @@ defmodule Spark.HotReload.Manifest do
   @doc """
   Lists all active components in the manifest.
   """
+  @spec list() :: [map()]
   def list do
     :ets.tab2list(@table)
     |> Enum.map(fn {_key, entry} -> entry end)
@@ -63,6 +68,7 @@ defmodule Spark.HotReload.Manifest do
   Gets the previous version of a component for rollback.
   Returns nil if no previous version exists.
   """
+  @spec previous({atom(), atom() | String.t()}) :: map() | nil
   def previous(component_key) do
     case get(component_key) do
       %{previous: prev} when prev != nil -> prev
@@ -75,6 +81,7 @@ defmodule Spark.HotReload.Manifest do
   Swaps previous to active and current to previous.
   Returns `:ok` or `{:error, :no_previous}`.
   """
+  @spec rollback_to_previous({atom(), atom() | String.t()}) :: {:ok, map()} | {:error, term()}
   def rollback_to_previous(component_key) do
     GenServer.call(__MODULE__, {:rollback, component_key})
   end
@@ -82,6 +89,7 @@ defmodule Spark.HotReload.Manifest do
   @doc """
   Checks if a component is registered in the manifest.
   """
+  @spec exists?({atom(), atom() | String.t()}) :: boolean()
   def exists?(component_key) do
     get(component_key) != nil
   end
@@ -94,6 +102,7 @@ defmodule Spark.HotReload.Manifest do
     if :ets.whereis(@table) != :undefined do
       :ets.delete(@table)
     end
+
     table = :ets.new(@table, [:set, :named_table, :public, read_concurrency: true])
     {:ok, %{table: table}}
   end

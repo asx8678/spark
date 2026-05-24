@@ -22,6 +22,7 @@ defmodule Mix.Tasks.Spark do
       {:ok, pid} = Spark.CLI.start_link()
 
       ref = Process.monitor(pid)
+
       receive do
         {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
       end

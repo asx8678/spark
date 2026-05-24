@@ -20,48 +20,42 @@ defmodule Spark.Prompt.Store do
 
   # --- Default prompts ---
 
-  @default_prompts %{
-    orchestrator: """
-    # Spark Orchestrator
+  # Default prompts are provided via Spark.CodePuppyCompat functions to
+  # keep prompts DRY and centrally managed. A module attribute cannot safely
+  # call runtime functions, so we use a function instead.
 
-    You are the Spark orchestrator agent. Your job is to:
-    - Understand user goals
-    - Create execution plans with clear tasks
-    - Await user approval before execution
-    - Review task results and synthesize answers
+  @doc """
+  Returns the default prompts map, populated from Spark.CodePuppyCompat.
+  """
+  @spec default_prompts() :: %{orchestrator: String.t(), worker: String.t(), refiner: String.t()}
+  def default_prompts do
+    %{
+      orchestrator: Spark.CodePuppyCompat.orchestrator_prompt(),
+      worker: Spark.CodePuppyCompat.worker_prompt(),
+      refiner: """
+      # Spark Prompt Refiner
 
-    Always produce valid JSON plans with tasks array.
-    """,
-    worker: """
-    # Spark Worker
+      You are a prompt refiner agent. Your job is to:
+      - Analyze prompt failures from execution logs
+      - Suggest specific improvements to prompts
+      - Create candidate prompts for testing
+      - Produce clear diffs and recommendations
 
-    You are a Spark worker agent. Your job is to:
-    - Execute assigned tasks precisely
-    - Use tools to read, write, and search files
-    - Report results clearly and concisely
-    - Follow policy constraints
-
-    Always report tool outcomes honestly.
-    """,
-    refiner: """
-    # Spark Prompt Refiner
-
-    You are a prompt refiner agent. Your job is to:
-    - Analyze prompt failures from execution logs
-    - Suggest specific improvements to prompts
-    - Create candidate prompts for testing
-    - Produce clear diffs and recommendations
-
-    Focus on actionable improvements, not vague advice.
-    """
-  }
+      Focus on actionable improvements, not vague advice.
+      """
+    }
+  end
 
   # --- Public API ---
 
   @doc """
   Starts the Store agent.
   """
+  @spec start_link(term()) :: {:ok, pid()} | {:error, term()}
   def start_link(_opts \\ []) do
+    # Self-check: Process.whereis(__MODULE__) is the correct pattern for
+    # named singleton Agents — not session-scoped, so Registry adds no
+    # value here. (spark-ard.19)
     case Process.whereis(__MODULE__) do
       nil -> Agent.start_link(fn -> load_all_from_disk() end, name: __MODULE__)
       pid -> {:ok, pid}
@@ -75,14 +69,16 @@ defmodule Spark.Prompt.Store do
   @spec get(atom()) :: String.t()
   def get(key) when key in @prompt_keys do
     ensure_loaded(key)
+
     Agent.get(__MODULE__, fn state ->
       case Map.get(state, key) do
         %{content: content} -> content
-        nil -> Map.get(@default_prompts, key, "")
+        nil -> Map.get(default_prompts(), key, "")
       end
     end)
   end
 
+  @spec get(atom()) :: no_return()
   def get(key), do: raise(ArgumentError, "Unknown prompt key: #{inspect(key)}")
 
   @doc """
@@ -91,6 +87,7 @@ defmodule Spark.Prompt.Store do
   @spec version(atom()) :: String.t()
   def version(key) when key in @prompt_keys do
     ensure_loaded(key)
+
     Agent.get(__MODULE__, fn state ->
       get_in(state, [key, :version]) || "unknown"
     end)
@@ -102,6 +99,7 @@ defmodule Spark.Prompt.Store do
   @spec hash(atom()) :: String.t()
   def hash(key) when key in @prompt_keys do
     ensure_loaded(key)
+
     Agent.get(__MODULE__, fn state ->
       get_in(state, [key, :hash]) || ""
     end)
@@ -123,6 +121,7 @@ defmodule Spark.Prompt.Store do
     end
   end
 
+  @spec reload(atom()) :: {:error, {:unknown_key, atom()}}
   def reload(key), do: {:error, {:unknown_key, key}}
 
   @doc """
@@ -179,13 +178,13 @@ defmodule Spark.Prompt.Store do
         Agent.update(__MODULE__, fn state -> Map.put(state, key, entry) end)
 
       {:error, :not_found} ->
-        default = Map.get(@default_prompts, key, "")
+        default = Map.get(default_prompts(), key, "")
         write_default!(key, default)
         entry = build_entry(key, default)
         Agent.update(__MODULE__, fn state -> Map.put(state, key, entry) end)
 
       {:error, _reason} ->
-        default = Map.get(@default_prompts, key, "")
+        default = Map.get(default_prompts(), key, "")
         entry = build_entry(key, default)
         Agent.update(__MODULE__, fn state -> Map.put(state, key, entry) end)
     end
@@ -195,13 +194,16 @@ defmodule Spark.Prompt.Store do
     @prompt_keys
     |> Enum.map(fn key ->
       case read_prompt_file(key) do
-        {:ok, content} -> {key, build_entry(key, content)}
+        {:ok, content} ->
+          {key, build_entry(key, content)}
+
         {:error, :not_found} ->
-          default = Map.get(@default_prompts, key, "")
+          default = Map.get(default_prompts(), key, "")
           write_default!(key, default)
           {key, build_entry(key, default)}
+
         {:error, _reason} ->
-          default = Map.get(@default_prompts, key, "")
+          default = Map.get(default_prompts(), key, "")
           {key, build_entry(key, default)}
       end
     end)

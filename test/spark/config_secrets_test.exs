@@ -16,17 +16,19 @@ defmodule Spark.Config.SecretsTest do
     original_pass = Application.get_env(:spark, :secrets_passphrase)
     Application.put_env(:spark, :secrets_passphrase, "test-passphrase-123")
 
-    # Stop any existing config agent
-    if pid = Process.whereis(Spark.Config) do
-      Agent.stop(pid)
+    # Stop any existing config or secrets agent
+    for name <- [Spark.Config, Spark.Config.Secrets] do
+      if pid = Process.whereis(name), do: Agent.stop(pid)
     end
 
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
       Application.put_env(:spark, :secrets_passphrase, original_pass)
-      if pid = Process.whereis(Spark.Config) do
-        Agent.stop(pid)
+
+      for name <- [Spark.Config, Spark.Config.Secrets] do
+        if pid = Process.whereis(name), do: Agent.stop(pid)
       end
+
       File.rm_rf!(tmp_dir)
     end)
 

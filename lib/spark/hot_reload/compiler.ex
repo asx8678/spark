@@ -12,12 +12,26 @@ defmodule Spark.HotReload.Compiler do
   require Logger
 
   @safe_modules [
-    Spark.CLI, Spark.Orchestrator, Spark.Dispatcher, Spark.Worker,
-    Spark.EventBus, Spark.Memory, Spark.Policy, Spark.Guidance,
-    Spark.PromptLab, Spark.PromptRefiner, Spark.Config,
-    Spark.ToolRunner, Spark.ToolRegistry, Spark.Workspace.LockManager,
-    Spark.Workspace.Diff, Spark.Workspace.Sandbox,
-    Spark.Tools.File, Spark.Tools.FS, Spark.Tools.Shell, Spark.Tools.Web,
+    Spark.CLI,
+    Spark.Orchestrator,
+    Spark.Dispatcher,
+    Spark.Worker,
+    Spark.EventBus,
+    Spark.Memory,
+    Spark.Policy,
+    Spark.Guidance,
+    Spark.PromptLab,
+    Spark.PromptRefiner,
+    Spark.Config,
+    Spark.ToolRunner,
+    Spark.ToolRegistry,
+    Spark.Workspace.LockManager,
+    Spark.Workspace.Diff,
+    Spark.Workspace.Sandbox,
+    Spark.Tools.File,
+    Spark.Tools.FS,
+    Spark.Tools.Shell,
+    Spark.Tools.Web,
     Spark.Tools.Forge
   ]
 
@@ -67,11 +81,13 @@ defmodule Spark.HotReload.Compiler do
   @doc """
   Returns the list of safe module names allowed for core module compilation.
   """
+  @spec safe_modules() :: [module()]
   def safe_modules, do: @safe_modules
 
   @doc """
   Checks if a module name is in the safe allowlist.
   """
+  @spec safe_module?(module()) :: boolean()
   def safe_module?(module) when is_atom(module) do
     module in @safe_modules
   end
@@ -79,10 +95,12 @@ defmodule Spark.HotReload.Compiler do
   @doc """
   Checks if a module name has an unsafe prefix.
   """
+  @spec unsafe_module_name?(module()) :: boolean()
   def unsafe_module_name?(module) when is_atom(module) do
     name = Atom.to_string(module)
     # Strip the Elixir. prefix if present for checking
     bare_name = String.trim_leading(name, "Elixir.")
+
     Enum.any?(@unsafe_prefixes, fn prefix ->
       String.starts_with?(bare_name, prefix) or name == "Elixir.#{prefix}"
     end)

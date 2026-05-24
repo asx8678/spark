@@ -117,7 +117,10 @@ defmodule Spark.ToolRunnerTest do
   describe "run/3 — timeout" do
     test "returns timeout error when tool exceeds timeout" do
       ToolRegistry.register(Spark.ToolRunnerTest.SlowTool)
-      assert {:error, reason} = ToolRunner.run("slow_tool", %{}, Map.put(@base_ctx, :timeout_ms, 100))
+
+      assert {:error, reason} =
+               ToolRunner.run("slow_tool", %{}, Map.put(@base_ctx, :timeout_ms, 100))
+
       assert reason.status == :timeout
     end
   end
@@ -133,7 +136,14 @@ defmodule Spark.ToolRunnerTest do
   describe "run/3 — output truncation" do
     test "truncates large output" do
       ToolRegistry.register(Spark.ToolRunnerTest.LargeOutputTool)
-      assert {:ok, result} = ToolRunner.run("large_output_tool", %{}, Map.put(@base_ctx, :max_output_bytes, 500))
+
+      assert {:ok, result} =
+               ToolRunner.run(
+                 "large_output_tool",
+                 %{},
+                 Map.put(@base_ctx, :max_output_bytes, 500)
+               )
+
       content = result.result.content
       # Should be truncated — much smaller than 50k chars
       assert String.contains?(content, "truncated")

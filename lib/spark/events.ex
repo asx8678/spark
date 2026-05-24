@@ -26,6 +26,11 @@ defmodule Spark.Events do
   # Worker
   defmacro worker_started, do: :worker_started
   defmacro worker_stopped, do: :worker_stopped
+  defmacro worker_iteration_started, do: :worker_iteration_started
+  defmacro worker_llm_started, do: :worker_llm_started
+  defmacro worker_llm_completed, do: :worker_llm_completed
+  defmacro worker_llm_failed, do: :worker_llm_failed
+  defmacro worker_llm_timeout, do: :worker_llm_timeout
 
   # Tool
   defmacro tool_started, do: :tool_started
@@ -55,16 +60,38 @@ defmodule Spark.Events do
   @spec all() :: [atom()]
   def all do
     [
-      session_started(), user_input_received(),
-      plan_created(), plan_awaiting_approval(), plan_approved(), plan_rejected(),
-      task_queued(), task_started(), task_completed(), task_failed(), task_retried(),
-      worker_started(), worker_stopped(),
-      tool_started(), tool_completed(), tool_failed(),
-      orchestrator_review_started(), orchestrator_review_completed(),
+      session_started(),
+      user_input_received(),
+      plan_created(),
+      plan_awaiting_approval(),
+      plan_approved(),
+      plan_rejected(),
+      task_queued(),
+      task_started(),
+      task_completed(),
+      task_failed(),
+      task_retried(),
+      worker_started(),
+      worker_stopped(),
+      worker_iteration_started(),
+      worker_llm_started(),
+      worker_llm_completed(),
+      worker_llm_failed(),
+      worker_llm_timeout(),
+      tool_started(),
+      tool_completed(),
+      tool_failed(),
+      orchestrator_review_started(),
+      orchestrator_review_completed(),
       memory_written(),
-      hot_reload_started(), hot_reload_completed(), hot_reload_failed(),
-      config_reloaded(), prompt_reloaded(), tool_reloaded(),
-      policy_reloaded(), code_reloaded()
+      hot_reload_started(),
+      hot_reload_completed(),
+      hot_reload_failed(),
+      config_reloaded(),
+      prompt_reloaded(),
+      tool_reloaded(),
+      policy_reloaded(),
+      code_reloaded()
     ]
   end
 

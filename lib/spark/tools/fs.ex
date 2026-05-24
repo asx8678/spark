@@ -15,7 +15,8 @@ defmodule Spark.Tools.ListDir do
   def name, do: "list_dir"
 
   @impl true
-  def description, do: "List directory contents relative to the project root. Skips noise dirs by default."
+  def description,
+    do: "List directory contents relative to the project root. Skips noise dirs by default."
 
   @impl true
   def schema do
@@ -24,7 +25,11 @@ defmodule Spark.Tools.ListDir do
       required: ["path"],
       properties: %{
         path: %{type: "string", description: "Project-root-relative directory path"},
-        skip: %{type: "array", items: %{type: "string"}, description: "Dir names to skip (default: .git, _build, deps, node_modules)"}
+        skip: %{
+          type: "array",
+          items: %{type: "string"},
+          description: "Dir names to skip (default: .git, _build, deps, node_modules)"
+        }
       }
     }
   end
@@ -56,12 +61,13 @@ defmodule Spark.Tools.ListDir do
         max = Map.get(context, :max_output_bytes, @max_output_bytes)
         truncated = maybe_truncate(formatted, max)
 
-        {:ok, %{
-          path: path,
-          entries: entries,
-          output: truncated,
-          truncated: byte_size(formatted) > max
-        }}
+        {:ok,
+         %{
+           path: path,
+           entries: entries,
+           output: truncated,
+           truncated: byte_size(formatted) > max
+         }}
     end
   end
 
@@ -135,13 +141,14 @@ defmodule Spark.Tools.Glob do
     max = Map.get(context, :max_output_bytes, @max_output_bytes)
     truncated = maybe_truncate(formatted, max)
 
-    {:ok, %{
-      pattern: pattern,
-      matches: matches,
-      count: length(matches),
-      output: truncated,
-      truncated: byte_size(formatted) > max
-    }}
+    {:ok,
+     %{
+       pattern: pattern,
+       matches: matches,
+       count: length(matches),
+       output: truncated,
+       truncated: byte_size(formatted) > max
+     }}
   end
 
   def execute(_args, _context) do
@@ -182,7 +189,10 @@ defmodule Spark.Tools.Grep do
       required: ["pattern"],
       properties: %{
         pattern: %{type: "string", description: "Text pattern to search for"},
-        path: %{type: "string", description: "Subdirectory within project root to search (default: .)"}
+        path: %{
+          type: "string",
+          description: "Subdirectory within project root to search (default: .)"
+        }
       }
     }
   end
@@ -206,13 +216,14 @@ defmodule Spark.Tools.Grep do
       max = Map.get(context, :max_output_bytes, @max_output_bytes)
       truncated = maybe_truncate(formatted, max)
 
-      {:ok, %{
-        pattern: pattern,
-        path: search_path,
-        matches: length(matches),
-        output: truncated,
-        truncated: byte_size(formatted) > max
-      }}
+      {:ok,
+       %{
+         pattern: pattern,
+         path: search_path,
+         matches: length(matches),
+         output: truncated,
+         truncated: byte_size(formatted) > max
+       }}
     end
   end
 

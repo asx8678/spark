@@ -91,11 +91,13 @@ defmodule Spark.EventBusTest do
     test "publishes to correct topic with metadata" do
       EventBus.subscribe("spark:session:sess_xyz")
       assert :ok = EventBus.publish_session("sess_xyz", :user_input_received, %{msg: "hi"})
+
       assert_receive %Event{
-        type: :user_input_received,
-        topic: "spark:session:sess_xyz",
-        session_id: "sess_xyz"
-      }, 500
+                       type: :user_input_received,
+                       topic: "spark:session:sess_xyz",
+                       session_id: "sess_xyz"
+                     },
+                     500
     after
       EventBus.unsubscribe("spark:session:sess_xyz")
     end
@@ -105,11 +107,13 @@ defmodule Spark.EventBusTest do
     test "publishes to plan topic with metadata" do
       EventBus.subscribe("spark:plan:plan_123")
       assert :ok = EventBus.publish_plan("plan_123", :plan_approved, %{task_count: 5})
+
       assert_receive %Event{
-        type: :plan_approved,
-        topic: "spark:plan:plan_123",
-        plan_id: "plan_123"
-      }, 500
+                       type: :plan_approved,
+                       topic: "spark:plan:plan_123",
+                       plan_id: "plan_123"
+                     },
+                     500
     after
       EventBus.unsubscribe("spark:plan:plan_123")
     end
@@ -119,11 +123,13 @@ defmodule Spark.EventBusTest do
     test "publishes to task topic with metadata" do
       EventBus.subscribe("spark:task:task_456")
       assert :ok = EventBus.publish_task("task_456", :task_completed, %{duration_ms: 100})
+
       assert_receive %Event{
-        type: :task_completed,
-        topic: "spark:task:task_456",
-        task_id: "task_456"
-      }, 500
+                       type: :task_completed,
+                       topic: "spark:task:task_456",
+                       task_id: "task_456"
+                     },
+                     500
     after
       EventBus.unsubscribe("spark:task:task_456")
     end
@@ -133,10 +139,12 @@ defmodule Spark.EventBusTest do
     test "publishes to worker topic" do
       EventBus.subscribe("spark:worker:worker_789")
       assert :ok = EventBus.publish_worker("worker_789", :worker_started, %{task: "t1"})
+
       assert_receive %Event{
-        type: :worker_started,
-        topic: "spark:worker:worker_789"
-      }, 500
+                       type: :worker_started,
+                       topic: "spark:worker:worker_789"
+                     },
+                     500
     after
       EventBus.unsubscribe("spark:worker:worker_789")
     end
@@ -146,11 +154,13 @@ defmodule Spark.EventBusTest do
     test "publishes to hot_reload topic" do
       EventBus.subscribe("spark:hot_reload")
       assert :ok = EventBus.publish_hot_reload(:prompt_reloaded, %{prompt: :worker})
+
       assert_receive %Event{
-        type: :prompt_reloaded,
-        topic: "spark:hot_reload",
-        source: :hot_reload
-      }, 500
+                       type: :prompt_reloaded,
+                       topic: "spark:hot_reload",
+                       source: :hot_reload
+                     },
+                     500
     after
       EventBus.unsubscribe("spark:hot_reload")
     end
@@ -164,18 +174,22 @@ defmodule Spark.EventBusTest do
       spawn(fn ->
         EventBus.subscribe("spark:events")
         send(parent, {:ready, test_ref, :sub1})
+
         receive do
           %Event{type: :multi_test} -> send(parent, {:received, test_ref, :sub1})
-        after 500 -> send(parent, {:timeout, test_ref, :sub1})
+        after
+          500 -> send(parent, {:timeout, test_ref, :sub1})
         end
       end)
 
       spawn(fn ->
         EventBus.subscribe("spark:events")
         send(parent, {:ready, test_ref, :sub2})
+
         receive do
           %Event{type: :multi_test} -> send(parent, {:received, test_ref, :sub2})
-        after 500 -> send(parent, {:timeout, test_ref, :sub2})
+        after
+          500 -> send(parent, {:timeout, test_ref, :sub2})
         end
       end)
 

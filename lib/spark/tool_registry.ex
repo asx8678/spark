@@ -28,6 +28,7 @@ defmodule Spark.ToolRegistry do
   @doc """
   Starts the ToolRegistry GenServer.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, @registry_name)
     GenServer.start_link(__MODULE__, opts, name: name)
@@ -101,6 +102,60 @@ defmodule Spark.ToolRegistry do
   end
 
   @doc """
+  Registers all built-in Spark tools.
+
+  Called automatically during application startup. Idempotent —
+  skips tools that are already registered.
+  """
+  @spec register_defaults() :: :ok
+  def register_defaults do
+    for mod <- default_tool_modules() do
+      try do
+        # Use replace: true so re-registration (e.g. hot reload) doesn't fail
+        case register(mod, replace: true) do
+          :ok -> :ok
+          {:error, {:already_registered, _}} -> :ok
+          {:error, _} -> :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
+  Returns the list of built-in tool modules.
+  """
+  @spec default_tool_modules() :: [module()]
+  def default_tool_modules do
+    [
+      Spark.Tools.ReadFile,
+      Spark.Tools.WriteFile,
+      Spark.Tools.EditFile,
+      Spark.Tools.ListDir,
+      Spark.Tools.Glob,
+      Spark.Tools.Grep,
+      Spark.Tools.Bash,
+      Spark.Tools.WebFetch,
+      Spark.Tools.WebSearch,
+      Spark.Tools.CreateAndLoadTool
+    ]
+  end
+
+  @doc """
+  Returns OpenAI-compatible function tool schemas for all registered tools.
+
+  Each entry: `%{type: "function", function: %{name: name, description: desc, parameters: schema}}`
+  Suitable for passing as the `:tools` field in LLM completion requests.
+  """
+  @spec openai_schemas() :: [map()]
+  def openai_schemas do
+    GenServer.call(@registry_name, :openai_schemas)
+  end
+
+  @doc """
   Clears all registered tools and versions. Useful for test cleanup.
   """
   @spec clear() :: :ok
@@ -111,8 +166,16 @@ defmodule Spark.ToolRegistry do
   # --- GenServer callbacks ---
 
   @impl true
-  def init(_opts) do
-    {:ok, %{tools: %{}, versions: %{}}}
+  def init(opts) do
+    # Register default tools during startup (safe even if called multiple times)
+    state = %{tools: %{}, versions: %{}}
+
+    if Keyword.get(opts, :register_defaults, true) do
+      # Schedule registration after init returns so the GenServer is fully started
+      send(self(), :register_defaults)
+    end
+
+    {:ok, state}
   end
 
   @impl true
@@ -190,6 +253,48 @@ defmodule Spark.ToolRegistry do
   @impl true
   def handle_call(:clear, _from, _state) do
     {:reply, :ok, %{tools: %{}, versions: %{}}}
+  end
+
+  @impl true
+  def handle_call(:openai_schemas, _from, state) do
+    schemas =
+      state.tools
+      |> Enum.map(fn {_name, %{module: mod}} ->
+        %{
+          type: "function",
+          function: %{
+            name: mod.name(),
+            description: mod.description(),
+            parameters: mod.schema()
+          }
+        }
+      end)
+
+    {:reply, schemas, state}
+  end
+
+  @impl true
+  def handle_info(:register_defaults, state) do
+    new_state =
+      Enum.reduce(Spark.ToolRegistry.default_tool_modules(), state, fn mod, acc ->
+        try do
+          case Spark.Tool.implements?(mod) do
+            true ->
+              tool_name = mod.name()
+              version = Map.get(acc.versions, tool_name, 0) + 1
+              entry = %{module: mod, metadata: %{}, version: version}
+              acc = put_in(acc.tools[tool_name], entry)
+              put_in(acc.versions[tool_name], version)
+
+            false ->
+              acc
+          end
+        rescue
+          _ -> acc
+        end
+      end)
+
+    {:noreply, new_state}
   end
 
   # --- Private helpers ---

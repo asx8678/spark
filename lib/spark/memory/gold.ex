@@ -70,6 +70,7 @@ defmodule Spark.Memory.Gold do
   end
 
   @doc "Returns whether Gold memory is enabled."
+  @spec gold_enabled?() :: boolean()
   def gold_enabled? do
     Config.get([:memory, :gold_enabled], true) in [true, "true"]
   end

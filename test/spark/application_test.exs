@@ -40,6 +40,7 @@ defmodule Spark.ApplicationTest do
         {:ok, _} -> :ok
         {:error, {:already_started, _}} -> :ok
       end
+
       assert is_binary(Spark.Prompt.Store.get(:orchestrator))
     end
 

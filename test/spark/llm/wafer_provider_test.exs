@@ -20,7 +20,9 @@ defmodule Spark.LLM.WaferProviderTest do
         "id" => "chatcmpl-test123",
         "model" => "deepseek-chat",
         "choices" => [
-          %{"message" => %{"role" => "assistant", "content" => "Hello world", "tool_calls" => nil}}
+          %{
+            "message" => %{"role" => "assistant", "content" => "Hello world", "tool_calls" => nil}
+          }
         ],
         "usage" => %{"prompt_tokens" => 10, "completion_tokens" => 5, "total_tokens" => 15}
       }
@@ -116,6 +118,41 @@ defmodule Spark.LLM.WaferProviderTest do
       result = WaferProvider.complete([], %{base_url: "http://localhost:0"})
       # Should get a request error since no server is running
       assert match?({:error, _}, result)
+    end
+  end
+
+  describe "resilience integration with CircuitBreaker and RateLimiter" do
+    setup do
+      # Ensure tables exist
+      if :ets.whereis(:spark_circuit_breakers) == :undefined do
+        :ets.new(:spark_circuit_breakers, [:set, :public, :named_table])
+      end
+
+      if :ets.whereis(:spark_rate_limiters) == :undefined do
+        :ets.new(:spark_rate_limiters, [:set, :public, :named_table])
+      end
+
+      # Clear state for wafer provider
+      :ets.delete(:spark_circuit_breakers, :wafer)
+      :ets.delete(:spark_rate_limiters, :wafer)
+
+      :ok
+    end
+
+    test "complete/2 returns circuit_open error when circuit is open" do
+      now = System.monotonic_time(:millisecond)
+      :ets.insert(:spark_circuit_breakers, {:wafer, :open, [], now})
+
+      result = WaferProvider.complete([], %{})
+      assert match?({:error, {:circuit_open, _}}, result)
+    end
+
+    test "stream/3 returns circuit_open error when circuit is open" do
+      now = System.monotonic_time(:millisecond)
+      :ets.insert(:spark_circuit_breakers, {:wafer, :open, [], now})
+
+      result = WaferProvider.stream([], %{}, fn _ -> :ok end)
+      assert match?({:error, {:circuit_open, _}}, result)
     end
   end
 end

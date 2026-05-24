@@ -30,25 +30,31 @@ defmodule Spark.DispatcherMonitoringTest do
     if pid = Process.whereis(@crash_dispatcher), do: GenServer.stop(pid, :shutdown)
 
     # Start a dispatcher using the Crash worker so every spawned worker dies
-    {:ok, _pid} = Dispatcher.start_link(
-      name: @crash_dispatcher,
-      session_id: "monitor_session",
-      plan_id: "monitor_plan",
-      worker_module: Spark.FakeWorker.Crash,
-      max_concurrency: 1
-    )
+    {:ok, _pid} =
+      Dispatcher.start_link(
+        name: @crash_dispatcher,
+        session_id: "monitor_session",
+        plan_id: "monitor_plan",
+        worker_module: Spark.FakeWorker.Crash,
+        max_concurrency: 1
+      )
 
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
       EventBus.clear_hooks()
+
       try do
         if pid = Process.whereis(@crash_dispatcher), do: GenServer.stop(pid, :shutdown)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Spark.Config), do: Agent.stop(pid)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       File.rm_rf!(tmp_dir)
     end)
 
@@ -76,9 +82,14 @@ defmodule Spark.DispatcherMonitoringTest do
 
   defp do_await_failed_count(count, deadline) do
     s = status()
+
     cond do
-      s.failed_count >= count -> s
-      System.monotonic_time(:millisecond) >= deadline -> s
+      s.failed_count >= count ->
+        s
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        s
+
       true ->
         Process.sleep(30)
         do_await_failed_count(count, deadline)
@@ -172,13 +183,14 @@ defmodule Spark.DispatcherMonitoringTest do
       Process.flag(:trap_exit, true)
       normal_name = :"spark_dispatcher_tracking_#{:erlang.unique_integer([:positive])}"
 
-      {:ok, _pid} = Dispatcher.start_link(
-        name: normal_name,
-        session_id: "track_session",
-        plan_id: "track_plan",
-        worker_module: Spark.FakeWorker,
-        max_concurrency: 3
-      )
+      {:ok, _pid} =
+        Dispatcher.start_link(
+          name: normal_name,
+          session_id: "track_session",
+          plan_id: "track_plan",
+          worker_module: Spark.FakeWorker,
+          max_concurrency: 3
+        )
 
       tasks = for i <- 1..3, do: make_task("track_ok#{i}")
       :ok = GenServer.call(normal_name, {:enqueue, "track_plan", tasks})
@@ -211,13 +223,14 @@ defmodule Spark.DispatcherMonitoringTest do
       Process.flag(:trap_exit, true)
       normal_name = :"spark_dispatcher_mix_#{:erlang.unique_integer([:positive])}"
 
-      {:ok, _pid} = Dispatcher.start_link(
-        name: normal_name,
-        session_id: "mix_session",
-        plan_id: "mix_plan",
-        worker_module: Spark.FakeWorker,
-        max_concurrency: 3
-      )
+      {:ok, _pid} =
+        Dispatcher.start_link(
+          name: normal_name,
+          session_id: "mix_session",
+          plan_id: "mix_plan",
+          worker_module: Spark.FakeWorker,
+          max_concurrency: 3
+        )
 
       good_tasks = for i <- 1..2, do: make_task("mix_ok#{i}")
       :ok = GenServer.call(normal_name, {:enqueue, "mix_plan", good_tasks})
@@ -243,8 +256,12 @@ defmodule Spark.DispatcherMonitoringTest do
 
   defp spin_until(status, target_completed, deadline, server_name) do
     cond do
-      status.completed_count >= target_completed -> status
-      System.monotonic_time(:millisecond) >= deadline -> status
+      status.completed_count >= target_completed ->
+        status
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        status
+
       true ->
         Process.sleep(30)
         spin_until(GenServer.call(server_name, :status), target_completed, deadline, server_name)

@@ -32,6 +32,7 @@ defmodule Spark.AgentManager do
 
   # --- Public API ---
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
@@ -50,19 +51,22 @@ defmodule Spark.AgentManager do
   Returns {:ok, agent} or {:error, reason}.
   """
   @spec pin_model(String.t(), String.t()) :: {:ok, map()} | {:error, String.t()}
-  def pin_model(agent_key, model_id), do: GenServer.call(__MODULE__, {:pin_model, agent_key, model_id})
+  def pin_model(agent_key, model_id),
+    do: GenServer.call(__MODULE__, {:pin_model, agent_key, model_id})
 
   @doc """
   Resolves actor type to its agent's full config (model, provider, base_url).
   Returns nil if no agent matches the actor type.
   """
   @spec resolve_for_actor(atom()) :: map() | nil
-  def resolve_for_actor(actor_type), do: GenServer.call(__MODULE__, {:resolve_for_actor, actor_type})
+  def resolve_for_actor(actor_type),
+    do: GenServer.call(__MODULE__, {:resolve_for_actor, actor_type})
 
   # --- GenServer Callbacks ---
 
   @impl true
   def init(_opts) do
+    Logger.metadata(actor: :agent_manager)
     agents = load_agents()
     Logger.info("AgentManager: initialized with #{map_size(agents)} agents")
     {:ok, agents}
@@ -86,7 +90,8 @@ defmodule Spark.AgentManager do
         model = Spark.ModelCatalog.find_model(agent["provider"], model_id)
 
         if model == nil do
-          {:reply, {:error, "Unknown model: #{model_id} for provider #{agent["provider"]}"}, agents}
+          {:reply, {:error, "Unknown model: #{model_id} for provider #{agent["provider"]}"},
+           agents}
         else
           updated_agent = Map.put(agent, "model", model_id)
           updated_agents = Map.put(agents, agent_key, updated_agent)

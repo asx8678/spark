@@ -7,7 +7,9 @@ defmodule Spark.PromptRefinerTest do
   alias Spark.Config
 
   setup do
-    tmp_dir = Path.join(System.tmp_dir!(), "spark_refiner_test_#{:erlang.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "spark_refiner_test_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
 
     orig_home = Application.get_env(:spark, :home_dir)
@@ -25,12 +27,14 @@ defmodule Spark.PromptRefinerTest do
     on_exit(fn ->
       Application.delete_env(:spark, :home_dir)
       if orig_home, do: Application.put_env(:spark, :home_dir, orig_home)
+
       try do
         pid = Process.whereis(Store)
         if pid, do: GenServer.stop(pid)
       rescue
         _ -> :ok
       end
+
       File.rm_rf!(tmp_dir)
     end)
 
@@ -81,10 +85,16 @@ defmodule Spark.PromptRefinerTest do
   describe "approve/1 and reject/1" do
     test "approve sets approved to true" do
       refinement = %{
-        session_id: "test", prompt_key: :orchestrator,
-        current_version: "1", candidate_version: "2",
-        analysis: "", suggestions: [], candidate_prompt: "test",
-        lab_report: nil, diff: "", recommendation: :needs_review,
+        session_id: "test",
+        prompt_key: :orchestrator,
+        current_version: "1",
+        candidate_version: "2",
+        analysis: "",
+        suggestions: [],
+        candidate_prompt: "test",
+        lab_report: nil,
+        diff: "",
+        recommendation: :needs_review,
         approved: false
       }
 
@@ -94,10 +104,16 @@ defmodule Spark.PromptRefinerTest do
 
     test "reject sets recommendation to reject" do
       refinement = %{
-        session_id: "test", prompt_key: :orchestrator,
-        current_version: "1", candidate_version: "2",
-        analysis: "", suggestions: [], candidate_prompt: "test",
-        lab_report: nil, diff: "", recommendation: :needs_review,
+        session_id: "test",
+        prompt_key: :orchestrator,
+        current_version: "1",
+        candidate_version: "2",
+        analysis: "",
+        suggestions: [],
+        candidate_prompt: "test",
+        lab_report: nil,
+        diff: "",
+        recommendation: :needs_review,
         approved: false
       }
 
@@ -110,13 +126,15 @@ defmodule Spark.PromptRefinerTest do
   describe "apply/1" do
     test "fails for unapproved refinement" do
       refinement = %{
-        approved: false, prompt_key: :orchestrator, candidate_prompt: "test"
+        approved: false,
+        prompt_key: :orchestrator,
+        candidate_prompt: "test"
       }
 
       assert {:error, :not_approved} = PromptRefiner.apply(refinement)
     end
 
-    test "applies approved refinement and triggers reload", %{tmp_dir: tmp_dir, session_id: sid} do
+    test "applies approved refinement and triggers reload" do
       # First, set up the store with a known prompt
       Store.write(:worker, "Original worker prompt")
 

@@ -15,6 +15,7 @@ defmodule Spark.HotReload.CompilerTest do
   describe "compile_tool/1" do
     test "compiles a valid tool module", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "good_tool.ex")
+
       File.write!(path, """
       defmodule Spark.HotReload.CompilerTest.GoodTool do
         def name, do: "good_tool"
@@ -35,6 +36,7 @@ defmodule Spark.HotReload.CompilerTest do
 
     test "rejects tool missing name callback", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "no_name_tool.ex")
+
       File.write!(path, """
       defmodule Spark.HotReload.CompilerTest.NoNameTool do
         def description, do: "No name"
@@ -52,6 +54,7 @@ defmodule Spark.HotReload.CompilerTest do
 
     test "rejects tool with non-string name", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "bad_name_tool.ex")
+
       File.write!(path, """
       defmodule Spark.HotReload.CompilerTest.BadNameTool do
         def name, do: :not_a_string
@@ -70,6 +73,7 @@ defmodule Spark.HotReload.CompilerTest do
 
     test "rejects tool with non-map schema", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "bad_schema_tool.ex")
+
       File.write!(path, """
       defmodule Spark.HotReload.CompilerTest.BadSchemaTool do
         def name, do: "bad_schema"
@@ -88,6 +92,7 @@ defmodule Spark.HotReload.CompilerTest do
 
     test "rejects tool with invalid risk level", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "bad_risk_tool.ex")
+
       File.write!(path, """
       defmodule Spark.HotReload.CompilerTest.BadRiskTool do
         def name, do: "bad_risk"
@@ -119,6 +124,7 @@ defmodule Spark.HotReload.CompilerTest do
   describe "compile_module/1" do
     test "rejects unsafe module names", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "io_hack.ex")
+
       File.write!(path, """
       defmodule IO.Hacked do
         def evil, do: :yes
@@ -130,6 +136,7 @@ defmodule Spark.HotReload.CompilerTest do
 
     test "rejects module not in allowlist", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "unknown_module.ex")
+
       File.write!(path, """
       defmodule Spark.HotReload.CompilerTest.UnknownModule do
         def hello, do: :world
@@ -144,6 +151,7 @@ defmodule Spark.HotReload.CompilerTest do
 
     test "rejects System module prefix", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "system_hack.ex")
+
       File.write!(path, """
       defmodule System.Hacked do
         def evil, do: :yes

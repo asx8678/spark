@@ -6,7 +6,9 @@ defmodule Spark.Memory.BronzeTest do
 
   setup do
     # Use a temp dir for each test
-    tmp_dir = Path.join(System.tmp_dir!(), "spark_bronze_test_#{:erlang.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "spark_bronze_test_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
 
     orig_home = Application.get_env(:spark, :home_dir)
@@ -67,6 +69,7 @@ defmodule Spark.Memory.BronzeTest do
     test "truncates payloads over 10KB and stores hash", %{session_id: sid} do
       # Create a payload larger than 10KB
       big_content = String.duplicate("x", 12_000)
+
       event = %{
         type: :tool_completed,
         source: :tool_runner,
@@ -115,8 +118,12 @@ defmodule Spark.Memory.BronzeTest do
     end
 
     test "handles a valid Event and appends it", %{session_id: sid} do
-      event = Spark.Types.Event.new(:plan_approved, %{plan_id: "p1"},
-        topic: "spark:plan:p1", source: :orchestrator, session_id: sid)
+      event =
+        Spark.Types.Event.new(:plan_approved, %{plan_id: "p1"},
+          topic: "spark:plan:p1",
+          source: :orchestrator,
+          session_id: sid
+        )
 
       result = Bronze.handle_event(event, sid)
       assert result in [:ok, :skipped]
@@ -129,8 +136,11 @@ defmodule Spark.Memory.BronzeTest do
     end
 
     test "skips uninteresting event types", %{session_id: sid} do
-      event = Spark.Types.Event.new(:random_uninteresting, %{data: "x"},
-        topic: "spark:events", source: :test)
+      event =
+        Spark.Types.Event.new(:random_uninteresting, %{data: "x"},
+          topic: "spark:events",
+          source: :test
+        )
 
       result = Bronze.handle_event(event, sid)
       assert result == :skipped

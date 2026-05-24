@@ -202,9 +202,11 @@ defmodule Spark.CLITest do
       _state = %CLI{active_plan: nil, session_id: "test"}
 
       # Just verify it parses without crashing
-      _output = capture_io(fn ->
-        CLI.parse("/approve")
-      end)
+      _output =
+        capture_io(fn ->
+          CLI.parse("/approve")
+        end)
+
       assert {:ok, %Command{type: :approve}} = CLI.parse("/approve")
     end
   end
@@ -213,43 +215,47 @@ defmodule Spark.CLITest do
 
   describe "Approval UI — plan rendering" do
     setup do
-      task = Spark.Types.Task.new(%{
-        id: "task_1",
-        plan_id: "plan_1",
-        title: "Implement auth",
-        description: "Add JWT auth",
-        risk: :high,
-        depends_on: [],
-        read_paths: ["/lib/auth.ex"],
-        write_paths: ["/lib/auth_new.ex"]
-      })
+      task =
+        Spark.Types.Task.new(%{
+          id: "task_1",
+          plan_id: "plan_1",
+          title: "Implement auth",
+          description: "Add JWT auth",
+          risk: :high,
+          depends_on: [],
+          read_paths: ["/lib/auth.ex"],
+          write_paths: ["/lib/auth_new.ex"]
+        })
 
-      plan = Spark.Types.Plan.new(%{
-        id: "plan_1",
-        user_goal: "Build authentication",
-        summary: "3-step auth plan",
-        tasks: [task]
-      })
+      plan =
+        Spark.Types.Plan.new(%{
+          id: "plan_1",
+          user_goal: "Build authentication",
+          summary: "3-step auth plan",
+          tasks: [task]
+        })
 
       %{plan: plan, task: task}
     end
 
     test "render_plan_summary outputs plan info", %{plan: plan} do
-      _output = capture_io(fn ->
-        # We can't call render_plan_summary directly (private), but we
-        # can test indirectly by verifying the plan struct has what we need
-        assert plan.user_goal == "Build authentication"
-        assert plan.summary == "3-step auth plan"
-        assert length(plan.tasks) == 1
-        assert hd(plan.tasks).risk == :high
-        assert hd(plan.tasks).depends_on == []
-        assert hd(plan.tasks).write_paths == ["/lib/auth_new.ex"]
-      end)
+      _output =
+        capture_io(fn ->
+          # We can't call render_plan_summary directly (private), but we
+          # can test indirectly by verifying the plan struct has what we need
+          assert plan.user_goal == "Build authentication"
+          assert plan.summary == "3-step auth plan"
+          assert length(plan.tasks) == 1
+          assert hd(plan.tasks).risk == :high
+          assert hd(plan.tasks).depends_on == []
+          assert hd(plan.tasks).write_paths == ["/lib/auth_new.ex"]
+        end)
     end
 
     test "approval commands parse correctly" do
       assert {:ok, %Command{type: :approve}} = CLI.parse("/approve")
       assert {:ok, %Command{type: :reject}} = CLI.parse("/reject")
+
       assert {:ok, %Command{type: :modify, args: %{instruction: "change X"}}} =
                CLI.parse("/modify change X")
     end
@@ -279,12 +285,13 @@ defmodule Spark.CLITest do
       t2 = Spark.Types.Task.new(%{id: "t2", plan_id: "p1", title: "B", depends_on: []})
       t3 = Spark.Types.Task.new(%{id: "t3", plan_id: "p1", title: "C", depends_on: ["t1"]})
 
-      plan = Spark.Types.Plan.new(%{
-        id: "p1",
-        user_goal: "test",
-        summary: "test plan",
-        tasks: [t1, t2, t3]
-      })
+      plan =
+        Spark.Types.Plan.new(%{
+          id: "p1",
+          user_goal: "test",
+          summary: "test plan",
+          tasks: [t1, t2, t3]
+        })
 
       independent = Enum.count(plan.tasks, &(&1.depends_on == []))
       assert independent == 2
@@ -295,21 +302,30 @@ defmodule Spark.CLITest do
 
   describe "Parallel dashboard — data gathering" do
     test "dashboard tolerates missing dispatcher" do
-      _output = capture_io(fn ->
-        # The dashboard functions are private, but we test the safe wrappers
-        # indirectly through the parse interface
-        assert {:ok, %Command{type: :status}} = CLI.parse("/status")
-        assert {:ok, %Command{type: :workers}} = CLI.parse("/workers")
-        assert {:ok, %Command{type: :tasks}} = CLI.parse("/tasks")
-      end)
+      _output =
+        capture_io(fn ->
+          # The dashboard functions are private, but we test the safe wrappers
+          # indirectly through the parse interface
+          assert {:ok, %Command{type: :status}} = CLI.parse("/status")
+          assert {:ok, %Command{type: :workers}} = CLI.parse("/workers")
+          assert {:ok, %Command{type: :tasks}} = CLI.parse("/tasks")
+        end)
     end
 
     test "dispatcher status map has expected keys when available" do
       # When Dispatcher IS running, status returns a known-shape map
       # We verify the expected keys from Dispatcher.State.status_map
-      expected_keys = [:active_count, :max_concurrency, :paused?,
-                       :queue_length, :completed_count, :failed_count,
-                       :can_spawn?, :session_id, :plan_id]
+      expected_keys = [
+        :active_count,
+        :max_concurrency,
+        :paused?,
+        :queue_length,
+        :completed_count,
+        :failed_count,
+        :can_spawn?,
+        :session_id,
+        :plan_id
+      ]
 
       # Verify State module exposes these
       for key <- expected_keys do
@@ -347,15 +363,23 @@ defmodule Spark.CLITest do
     end
 
     test "orchestrator review completed event validates" do
-      event = Spark.Types.Event.new(:orchestrator_review_completed,
-        %{review: "All good"}, topic: "spark:plan:p1")
+      event =
+        Spark.Types.Event.new(
+          :orchestrator_review_completed,
+          %{review: "All good"}, topic: "spark:plan:p1")
+
       assert :ok = Spark.Types.Event.validate(event)
       assert event.type == :orchestrator_review_completed
     end
 
     test "hot reload events have correct types" do
-      for type <- [:prompt_reloaded, :tool_reloaded, :config_reloaded,
-                    :policy_reloaded, :guidance_reloaded] do
+      for type <- [
+            :prompt_reloaded,
+            :tool_reloaded,
+            :config_reloaded,
+            :policy_reloaded,
+            :guidance_reloaded
+          ] do
         event = Spark.Types.Event.new(type, %{}, topic: "spark:hot_reload")
         assert :ok = Spark.Types.Event.validate(event)
       end
@@ -408,6 +432,7 @@ defmodule Spark.CLITest do
       for {input, expected_type, expected_args} <- commands do
         assert {:ok, %Command{type: ^expected_type, args: args}} = CLI.parse(input),
                "Failed parsing: #{input}"
+
         for {k, v} <- expected_args do
           assert Map.get(args, k) == v,
                  "Key #{k} mismatch for #{input}: expected #{inspect(v)}, got #{inspect(Map.get(args, k))}"

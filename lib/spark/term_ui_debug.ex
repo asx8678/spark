@@ -14,12 +14,15 @@ defmodule Spark.TermUIDebug do
 
   def view(state) do
     stack(:vertical, [
-      styled(text("  Spark TUI Debug Mode  "), Style.new() |> Style.fg(:white) |> Style.bg(:red) |> Style.bold()),
+      styled(
+        text("  Spark TUI Debug Mode  "),
+        Style.new() |> Style.fg(:white) |> Style.bg(:red) |> Style.bold()
+      ),
       text(""),
       text("  #{state.msg}"),
       text(""),
       text("  Press A for agents, P for plan, D for dashboard"),
-      text("  Press Q to quit"),
+      text("  Press Q to quit")
     ])
   end
 
@@ -38,7 +41,8 @@ defmodule Spark.TermUIDebug do
         {:msg, :quit}
 
       # Printable characters
-      is_map(event) && is_binary(Map.get(event, :char, "")) && byte_size(Map.get(event, :char, "")) == 1 ->
+      is_map(event) && is_binary(Map.get(event, :char, "")) &&
+          byte_size(Map.get(event, :char, "")) == 1 ->
         ch = Map.get(event, :char)
         <<codepoint::utf8>> = ch
         IO.puts(:stderr, "[TERMUI DEBUG] printable char: #{ch} codepoint=#{codepoint}")
@@ -48,6 +52,7 @@ defmodule Spark.TermUIDebug do
       is_map(event) && is_atom(Map.get(event, :key)) ->
         key = Map.get(event, :key)
         IO.puts(:stderr, "[TERMUI DEBUG] special key: #{key}")
+
         case key do
           :enter -> {:msg, {:event, %{key: 0x0D}}}
           :escape -> {:msg, {:event, %{key: 0x1B}}}
@@ -78,12 +83,15 @@ defmodule Spark.TermUIDebug do
 
   def update(msg, state) do
     IO.puts(:stderr, "[TERMUI DEBUG] update msg: #{inspect(msg)}")
+
     case msg do
       {:event, %{ch: ch}} ->
         IO.puts(:stderr, "[TERMUI DEBUG] char event: #{ch}")
         {:ok, %{state | msg: "Pressed: #{<<ch::utf8>>} (##{ch})"}}
+
       {:event, %{key: _key}} ->
         {:ok, %{state | msg: "Special key pressed"}}
+
       _ ->
         {:ok, state}
     end

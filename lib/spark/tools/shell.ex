@@ -34,7 +34,8 @@ defmodule Spark.Tools.Bash do
   def name, do: "bash"
 
   @impl true
-  def description, do: "Execute a shell command with timeout. Blocks dangerous patterns. Requires task_id."
+  def description,
+    do: "Execute a shell command with timeout. Blocks dangerous patterns. Requires task_id."
 
   @impl true
   def schema do
@@ -55,21 +56,24 @@ defmodule Spark.Tools.Bash do
   def execute(%{command: command, task_id: task_id}, context)
       when is_binary(command) and is_binary(task_id) and task_id != "" do
     with :ok <- check_dangerous(command) do
-      timeout = Map.get(context, :timeout_ms, Map.get(context, :shell_timeout_ms, @default_timeout_ms))
+      timeout =
+        Map.get(context, :timeout_ms, Map.get(context, :shell_timeout_ms, @default_timeout_ms))
+
       max = Map.get(context, :max_output_bytes, @max_output_bytes)
 
       result = execute_command(command, timeout)
 
       case result do
         {:ok, exit_code, stdout, stderr} ->
-          {:ok, %{
-            exit_code: exit_code,
-            stdout: maybe_truncate(stdout, max),
-            stderr: maybe_truncate(stderr, max),
-            stdout_truncated: byte_size(stdout) > max,
-            stderr_truncated: byte_size(stderr) > max,
-            task_id: task_id
-          }}
+          {:ok,
+           %{
+             exit_code: exit_code,
+             stdout: maybe_truncate(stdout, max),
+             stderr: maybe_truncate(stderr, max),
+             stdout_truncated: byte_size(stdout) > max,
+             stderr_truncated: byte_size(stderr) > max,
+             task_id: task_id
+           }}
 
         {:error, :timeout} ->
           {:error, %{command: command, reason: :timeout, task_id: task_id}}
@@ -100,24 +104,26 @@ defmodule Spark.Tools.Bash do
 
   defp execute_command(command, timeout) do
     try do
-      task = Task.async(fn ->
-        # Wrap in subshell with stderr redirected to temp file for separate capture
-        tmp_stderr = Path.join(System.tmp_dir!(), "spark_stderr_#{:erlang.unique_integer([:positive])}")
+      task =
+        Task.async(fn ->
+          # Wrap in subshell with stderr redirected to temp file for separate capture
+          tmp_stderr =
+            Path.join(System.tmp_dir!(), "spark_stderr_#{:erlang.unique_integer([:positive])}")
 
-        cmd_with_redirect = "(#{command}) 2>\"#{tmp_stderr}\""
+          cmd_with_redirect = "(#{command}) 2>\"#{tmp_stderr}\""
 
-        {stdout, exit_code} = System.cmd("sh", ["-c", cmd_with_redirect])
+          {stdout, exit_code} = System.cmd("sh", ["-c", cmd_with_redirect])
 
-        stderr =
-          case File.read(tmp_stderr) do
-            {:ok, content} -> content
-            {:error, _} -> ""
-          end
+          stderr =
+            case File.read(tmp_stderr) do
+              {:ok, content} -> content
+              {:error, _} -> ""
+            end
 
-        File.rm(tmp_stderr)
+          File.rm(tmp_stderr)
 
-        {exit_code, stdout, stderr}
-      end)
+          {exit_code, stdout, stderr}
+        end)
 
       case Task.yield(task, timeout) || Task.shutdown(task, 5000) do
         {:ok, {exit_code, stdout, stderr}} ->

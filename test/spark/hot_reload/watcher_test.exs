@@ -30,26 +30,31 @@ defmodule Spark.HotReload.WatcherTest do
 
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
+
       try do
         if pid = Process.whereis(Watcher), do: GenServer.stop(pid, :shutdown)
       catch
         :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Coordinator), do: GenServer.stop(pid, :shutdown)
       catch
         :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Manifest), do: GenServer.stop(pid, :shutdown)
       catch
         :exit, _ -> :ok
       end
+
       try do
         if pid = Process.whereis(Spark.Config), do: Agent.stop(pid)
       catch
         :exit, _ -> :ok
       end
+
       File.rm_rf!(tmp_dir)
     end)
 

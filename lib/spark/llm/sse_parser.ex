@@ -22,14 +22,19 @@ defmodule Spark.LLM.SSEParser do
 
     cond do
       # Empty lines
-      trimmed == "" -> :ignore
+      trimmed == "" ->
+        :ignore
 
       # SSE comments / keepalive
-      String.starts_with?(trimmed, ":") -> :ignore
+      String.starts_with?(trimmed, ":") ->
+        :ignore
 
       # [DONE] sentinel
-      trimmed == "data: [DONE]" -> {:done}
-      trimmed == "data: [DONE]\n" -> {:done}
+      trimmed == "data: [DONE]" ->
+        {:done}
+
+      trimmed == "data: [DONE]\n" ->
+        {:done}
 
       # Data line with JSON
       String.starts_with?(trimmed, "data: ") ->
@@ -62,6 +67,7 @@ defmodule Spark.LLM.SSEParser do
     end
   end
 
+  @spec parse_line(term()) :: {:error, term()}
   def parse_line(_), do: {:error, :invalid_input}
 
   @doc """
@@ -75,18 +81,70 @@ defmodule Spark.LLM.SSEParser do
   """
   @spec parse_stream(binary()) :: [{:ok, map()} | {:done} | {:error, term()}]
   def parse_stream(raw_bytes) when is_binary(raw_bytes) do
-    raw_bytes
-    |> String.split("\n")
-    |> Enum.map(&parse_line/1)
-    |> Enum.reject(&(&1 == :ignore))
-    |> stop_on_done()
+    {results, buffer} = parse_stream(raw_bytes, "")
+
+    # parse_stream/1 receives complete data — flush any remaining buffer
+    case buffer do
+      "" ->
+        results
+
+      _ ->
+        case parse_line(buffer) do
+          :ignore -> results
+          {:done} -> stop_on_done(results ++ [{:done}])
+          {:ok, parsed} -> results ++ [{:ok, parsed}]
+          {:error, reason} -> results ++ [{:error, reason}]
+        end
+    end
+  end
+
+  @doc """
+  Parses a raw SSE byte stream with a carry-over buffer.
+
+  When a TCP packet splits a JSON line mid-way, the incomplete
+  fragment is kept in `buffer` for the next call. Returns a
+  `{results, remaining_buffer}` tuple.
+
+  Example:
+      {r1, buf} = parse_stream("data: {\\"cho", "")
+      {r2, _}  = parse_stream("ices\\":...}\\n", buf)
+  """
+  @spec parse_stream(binary(), binary()) ::
+          {[{:ok, map()} | {:done} | {:error, term()}], binary()}
+  def parse_stream(raw_bytes, buffer)
+      when is_binary(raw_bytes) and is_binary(buffer) do
+    combined = buffer <> raw_bytes
+
+    {lines_to_parse, remaining_buffer} =
+      if String.ends_with?(combined, "\n") do
+        {String.split(combined, "\n"), ""}
+      else
+        parts = String.split(combined, "\n")
+        {Enum.drop(parts, -1), List.last(parts)}
+      end
+
+    results =
+      lines_to_parse
+      |> Enum.map(&parse_line/1)
+      |> Enum.reject(&(&1 == :ignore))
+      |> stop_on_done()
+
+    # If DONE was encountered, discard any remaining buffer
+    final_buffer =
+      if Enum.any?(results, &match?({:done}, &1)) do
+        ""
+      else
+        remaining_buffer
+      end
+
+    {results, final_buffer}
   end
 
   defp stop_on_done(results) do
     case Enum.split_while(results, fn
-      {:done} -> false
-      _ -> true
-    end) do
+           {:done} -> false
+           _ -> true
+         end) do
       {before_done, [{:done} | _rest]} -> before_done ++ [{:done}]
       {before_done, []} -> before_done
     end

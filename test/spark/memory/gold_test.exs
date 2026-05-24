@@ -5,7 +5,9 @@ defmodule Spark.Memory.GoldTest do
   alias Spark.Config
 
   setup do
-    tmp_dir = Path.join(System.tmp_dir!(), "spark_gold_test_#{:erlang.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "spark_gold_test_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
 
     orig_home = Application.get_env(:spark, :home_dir)

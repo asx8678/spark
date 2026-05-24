@@ -37,6 +37,7 @@ defmodule Spark.Types.Plan do
   @doc """
   Creates a new Plan with auto-generated id and timestamp.
   """
+  @spec new(map()) :: t()
   def new(attrs) when is_map(attrs) do
     now = DateTime.utc_now()
     defaults = %{created_at: now, id: attrs[:id] || generate_id()}
@@ -46,6 +47,7 @@ defmodule Spark.Types.Plan do
   @doc """
   Validates a Plan struct, including nested task validation.
   """
+  @spec validate(t()) :: :ok | {:error, [{atom(), term()}]}
   def validate(%__MODULE__{} = plan) do
     errors = []
 
@@ -72,6 +74,7 @@ defmodule Spark.Types.Plan do
     # Check for duplicate task IDs
     task_ids = Enum.map(plan.tasks, & &1.id)
     duplicate_ids = task_ids -- Enum.uniq(task_ids)
+
     errors =
       if duplicate_ids != [],
         do: errors ++ [{:tasks, "duplicate task ids: #{inspect(duplicate_ids)}"}],
@@ -94,6 +97,7 @@ defmodule Spark.Types.Plan do
   @doc """
   Transitions plan to :awaiting_approval status.
   """
+  @spec awaiting_approval(t()) :: t()
   def awaiting_approval(%__MODULE__{} = plan) do
     %{plan | approval_status: :awaiting_approval}
   end
@@ -102,10 +106,12 @@ defmodule Spark.Types.Plan do
   Approves a plan that is :awaiting_approval. Sets approved_at timestamp.
   Returns {:ok, plan} or {:error, reason}.
   """
+  @spec approve(t()) :: {:ok, t()} | {:error, String.t()}
   def approve(%__MODULE__{approval_status: :awaiting_approval} = plan) do
     {:ok, %{plan | approval_status: :approved, approved_at: DateTime.utc_now()}}
   end
 
+  @spec approve(t()) :: {:error, String.t()}
   def approve(%__MODULE__{approval_status: status}) do
     {:error, "cannot approve plan with status: #{status}"}
   end
@@ -113,10 +119,12 @@ defmodule Spark.Types.Plan do
   @doc """
   Rejects a plan that is :awaiting_approval.
   """
+  @spec reject(t()) :: {:ok, t()} | {:error, String.t()}
   def reject(%__MODULE__{approval_status: :awaiting_approval} = plan) do
     {:ok, %{plan | approval_status: :rejected}}
   end
 
+  @spec reject(t()) :: {:error, String.t()}
   def reject(%__MODULE__{approval_status: status}) do
     {:error, "cannot reject plan with status: #{status}"}
   end
@@ -124,6 +132,7 @@ defmodule Spark.Types.Plan do
   @doc """
   Modifies a plan, resetting approval status and merging extra metadata.
   """
+  @spec modify(t(), map()) :: t()
   def modify(%__MODULE__{} = plan, extra_metadata \\ %{}) do
     %{plan | approval_status: :modified, metadata: Map.merge(plan.metadata, extra_metadata)}
   end
@@ -131,6 +140,7 @@ defmodule Spark.Types.Plan do
   @doc """
   Returns all task IDs in the plan.
   """
+  @spec task_ids(t()) :: [String.t()]
   def task_ids(%__MODULE__{tasks: tasks}), do: Enum.map(tasks, & &1.id)
 
   defp generate_id do

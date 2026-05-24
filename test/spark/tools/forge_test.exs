@@ -9,6 +9,7 @@ defmodule Spark.Tools.ForgeTest do
     case Process.whereis(Spark.ToolRegistry) do
       nil ->
         {:ok, _pid} = Spark.ToolRegistry.start_link([])
+
       _pid ->
         :ok
     end
@@ -16,7 +17,9 @@ defmodule Spark.Tools.ForgeTest do
     ToolRegistry.clear()
 
     # Use a temp home dir for tool storage
-    tmp_home = Path.join(System.tmp_dir!(), "spark_forge_test_#{:erlang.unique_integer([:positive])}")
+    tmp_home =
+      Path.join(System.tmp_dir!(), "spark_forge_test_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(Path.join(tmp_home, "tools"))
 
     original_home = Application.get_env(:spark, :home_dir)
@@ -28,6 +31,7 @@ defmodule Spark.Tools.ForgeTest do
       else
         Application.delete_env(:spark, :home_dir)
       end
+
       ToolRegistry.clear()
       File.rm_rf!(tmp_home)
     end)
@@ -62,10 +66,12 @@ defmodule Spark.Tools.ForgeTest do
 
   describe "CreateAndLoadTool.execute/2" do
     test "creates and loads a new tool", %{home_dir: _home} do
-      assert {:ok, result} = CreateAndLoadTool.execute(
-        %{name: "my_tool", source_code: @valid_tool_source, task_id: "t1"},
-        %{}
-      )
+      assert {:ok, result} =
+               CreateAndLoadTool.execute(
+                 %{name: "my_tool", source_code: @valid_tool_source, task_id: "t1"},
+                 %{}
+               )
+
       assert result.status == :created
       assert result.name == "my_tool"
       assert result.task_id == "t1"
@@ -83,58 +89,72 @@ defmodule Spark.Tools.ForgeTest do
     end
 
     test "rejects invalid tool name (uppercase)" do
-      assert {:error, reason} = CreateAndLoadTool.execute(
-        %{name: "BadName", source_code: @valid_tool_source, task_id: "t1"},
-        %{}
-      )
+      assert {:error, reason} =
+               CreateAndLoadTool.execute(
+                 %{name: "BadName", source_code: @valid_tool_source, task_id: "t1"},
+                 %{}
+               )
+
       assert reason.reason == :invalid_name_format
     end
 
     test "rejects invalid tool name (starts with number)" do
-      assert {:error, reason} = CreateAndLoadTool.execute(
-        %{name: "1tool", source_code: @valid_tool_source, task_id: "t1"},
-        %{}
-      )
+      assert {:error, reason} =
+               CreateAndLoadTool.execute(
+                 %{name: "1tool", source_code: @valid_tool_source, task_id: "t1"},
+                 %{}
+               )
+
       assert reason.reason == :invalid_name_format
     end
 
     test "rejects empty name" do
-      assert {:error, reason} = CreateAndLoadTool.execute(
-        %{name: "", source_code: @valid_tool_source, task_id: "t1"},
-        %{}
-      )
+      assert {:error, reason} =
+               CreateAndLoadTool.execute(
+                 %{name: "", source_code: @valid_tool_source, task_id: "t1"},
+                 %{}
+               )
+
       assert reason.reason == :empty_name
     end
 
     test "requires task_id" do
-      assert {:error, reason} = CreateAndLoadTool.execute(
-        %{name: "my_tool", source_code: @valid_tool_source},
-        %{}
-      )
+      assert {:error, reason} =
+               CreateAndLoadTool.execute(
+                 %{name: "my_tool", source_code: @valid_tool_source},
+                 %{}
+               )
+
       assert reason.reason == :missing_task_id
     end
 
     test "rejects empty task_id" do
-      assert {:error, reason} = CreateAndLoadTool.execute(
-        %{name: "my_tool", source_code: @valid_tool_source, task_id: ""},
-        %{}
-      )
+      assert {:error, reason} =
+               CreateAndLoadTool.execute(
+                 %{name: "my_tool", source_code: @valid_tool_source, task_id: ""},
+                 %{}
+               )
+
       assert reason.reason == :missing_task_id
     end
 
     test "returns error when name is missing" do
-      assert {:error, reason} = CreateAndLoadTool.execute(
-        %{source_code: @valid_tool_source, task_id: "t1"},
-        %{}
-      )
+      assert {:error, reason} =
+               CreateAndLoadTool.execute(
+                 %{source_code: @valid_tool_source, task_id: "t1"},
+                 %{}
+               )
+
       assert reason.reason == :missing_required_fields
     end
 
     test "reports compile errors for invalid source" do
-      assert {:error, result} = CreateAndLoadTool.execute(
-        %{name: "broken", source_code: "this is not valid elixir!", task_id: "t1"},
-        %{}
-      )
+      assert {:error, result} =
+               CreateAndLoadTool.execute(
+                 %{name: "broken", source_code: "this is not valid elixir!", task_id: "t1"},
+                 %{}
+               )
+
       # Should have some error detail
       assert is_map(result)
       assert result.name == "broken"

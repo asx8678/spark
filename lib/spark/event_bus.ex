@@ -63,6 +63,7 @@ defmodule Spark.EventBus do
     end
   end
 
+  @spec publish(String.t(), term()) :: {:error, :not_an_event}
   def publish(_topic, _not_event) do
     {:error, :not_an_event}
   end
@@ -163,11 +164,13 @@ defmodule Spark.EventBus do
   @spec add_hook(atom(), (Event.t() -> any())) :: :ok
   def add_hook(hook_name, function) when is_atom(hook_name) and is_function(function, 1) do
     hooks = get_hooks()
+
     if Map.has_key?(hooks, hook_name) do
       :ok
     else
       put_hooks(Map.put(hooks, hook_name, function))
     end
+
     :ok
   end
 
@@ -235,6 +238,7 @@ defmodule Spark.EventBus do
     {:ok, Event.new(type, payload, opts)}
   end
 
+  @spec normalize(term()) :: {:error, :cannot_normalize}
   def normalize(_), do: {:error, :cannot_normalize}
 
   @doc """
@@ -253,15 +257,18 @@ defmodule Spark.EventBus do
 
   defp get_hooks do
     case :ets.whereis(:spark_event_bus_hooks) do
-      :undefined -> %{}
-      tid -> try do
-        case :ets.lookup(tid, :hooks) do
-          [{:hooks, hooks}] -> hooks
-          [] -> %{}
+      :undefined ->
+        %{}
+
+      tid ->
+        try do
+          case :ets.lookup(tid, :hooks) do
+            [{:hooks, hooks}] -> hooks
+            [] -> %{}
+          end
+        rescue
+          _ -> %{}
         end
-      rescue
-        _ -> %{}
-      end
     end
   end
 
@@ -274,6 +281,7 @@ defmodule Spark.EventBus do
     case :ets.whereis(:spark_event_bus_hooks) do
       :undefined ->
         :ets.new(:spark_event_bus_hooks, [:set, :named_table, :public])
+
       tid ->
         tid
     end
@@ -281,6 +289,7 @@ defmodule Spark.EventBus do
 
   defp run_hooks(event) do
     hooks = get_hooks()
+
     Enum.each(hooks, fn {_name, fun} ->
       try do
         fun.(event)

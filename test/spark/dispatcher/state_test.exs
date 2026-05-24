@@ -16,10 +16,13 @@ defmodule Spark.Dispatcher.StateTest do
 
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
+
       try do
         if pid = Process.whereis(Spark.Config), do: Agent.stop(pid)
-      catch :exit, _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
+
       File.rm_rf!(tmp_dir)
     end)
 
@@ -169,10 +172,15 @@ defmodule Spark.Dispatcher.StateTest do
       {:ok, state} = State.enqueue(state, [t1, t2])
 
       {[_t1], state} = State.dequeue(state, 1)
-      state = State.add_active(state, "t1", %{
-        pid: self(), monitor_ref: make_ref(), worker_id: "w1",
-        started_at: DateTime.utc_now(), task: t1
-      })
+
+      state =
+        State.add_active(state, "t1", %{
+          pid: self(),
+          monitor_ref: make_ref(),
+          worker_id: "w1",
+          started_at: DateTime.utc_now(),
+          task: t1
+        })
 
       # t2 should NOT be ready (write conflict with active t1)
       ready = State.ready_tasks(state)
@@ -185,10 +193,15 @@ defmodule Spark.Dispatcher.StateTest do
       state = State.new()
       {:ok, state} = State.enqueue(state, [t1, t2])
       {[_t1], state} = State.dequeue(state, 1)
-      state = State.add_active(state, "t1", %{
-        pid: self(), monitor_ref: make_ref(), worker_id: "w1",
-        started_at: DateTime.utc_now(), task: t1
-      })
+
+      state =
+        State.add_active(state, "t1", %{
+          pid: self(),
+          monitor_ref: make_ref(),
+          worker_id: "w1",
+          started_at: DateTime.utc_now(),
+          task: t1
+        })
 
       ready = State.ready_tasks(state)
       assert Enum.any?(ready, &(&1.id == "t2"))
@@ -198,7 +211,16 @@ defmodule Spark.Dispatcher.StateTest do
   describe "active workers" do
     test "add and remove active workers" do
       state = State.new()
-      state = State.add_active(state, "t1", %{pid: self(), monitor_ref: make_ref(), worker_id: "w1", started_at: DateTime.utc_now(), task: make_task("t1")})
+
+      state =
+        State.add_active(state, "t1", %{
+          pid: self(),
+          monitor_ref: make_ref(),
+          worker_id: "w1",
+          started_at: DateTime.utc_now(),
+          task: make_task("t1")
+        })
+
       assert State.active_count(state) == 1
 
       state = State.remove_active(state, "t1")
@@ -249,10 +271,14 @@ defmodule Spark.Dispatcher.StateTest do
       state = State.new(max_concurrency: 1)
       assert State.can_spawn?(state)
 
-      state = State.add_active(state, "t1", %{
-        pid: self(), monitor_ref: make_ref(), worker_id: "w1",
-        started_at: DateTime.utc_now(), task: make_task("t1")
-      })
+      state =
+        State.add_active(state, "t1", %{
+          pid: self(),
+          monitor_ref: make_ref(),
+          worker_id: "w1",
+          started_at: DateTime.utc_now(),
+          task: make_task("t1")
+        })
 
       refute State.can_spawn?(state)
     end
@@ -272,6 +298,89 @@ defmodule Spark.Dispatcher.StateTest do
       assert status.can_spawn? == true
       assert status.session_id == "s1"
       assert status.plan_id == "p1"
+    end
+  end
+
+  describe "task_statuses/1" do
+    test "returns empty list for fresh state" do
+      state = State.new()
+      assert State.task_statuses(state) == []
+    end
+
+    test "includes queued tasks" do
+      state = State.new()
+      {:ok, state} = State.enqueue(state, [make_task("t1", %{title: "First task"})])
+      statuses = State.task_statuses(state)
+      assert length(statuses) == 1
+      assert %{:task_id => "t1", :title => "First task", :status => :queued} in statuses
+    end
+
+    test "includes running tasks from active_workers" do
+      state = State.new()
+      {:ok, state} = State.enqueue(state, [make_task("t1", %{title: "Running task"})])
+      {[_task], state} = State.dequeue(state, 1)
+
+      state =
+        State.add_active(state, "t1", %{
+          pid: self(),
+          monitor_ref: make_ref(),
+          worker_id: "w1",
+          started_at: DateTime.utc_now(),
+          task: make_task("t1", %{title: "Running task"})
+        })
+
+      statuses = State.task_statuses(state)
+      assert length(statuses) == 1
+      assert [status] = statuses
+      assert status.task_id == "t1"
+      assert status.title == "Running task"
+      assert status.status == :running
+      assert Map.has_key?(status, :elapsed_ms)
+    end
+
+    test "includes completed tasks" do
+      state = State.new()
+      state = State.mark_completed(state, "t1")
+      statuses = State.task_statuses(state)
+      assert length(statuses) == 1
+      assert Enum.any?(statuses, &(&1.task_id == "t1" and &1.status == :completed))
+    end
+
+    test "includes failed tasks" do
+      state = State.new()
+      state = State.mark_failed(state, "t1", %{reason: :timeout})
+      statuses = State.task_statuses(state)
+      assert length(statuses) == 1
+      assert Enum.any?(statuses, &(&1.task_id == "t1" and &1.status == :failed))
+    end
+
+    test "combines all statuses" do
+      state = State.new()
+      {:ok, state} = State.enqueue(state, [make_task("queued_task")])
+      {[_task], state} = State.dequeue(state, 1)
+
+      state =
+        State.add_active(state, "queued_task", %{
+          pid: self(),
+          monitor_ref: make_ref(),
+          worker_id: "w1",
+          started_at: DateTime.utc_now(),
+          task: make_task("queued_task")
+        })
+
+      state = State.mark_completed(state, "done_task")
+      state = State.mark_failed(state, "fail_task", %{reason: :error})
+
+      statuses = State.task_statuses(state)
+      ids = Enum.map(statuses, & &1.task_id)
+      assert "queued_task" in ids
+      assert "done_task" in ids
+      assert "fail_task" in ids
+
+      status_map = Map.new(statuses, &{&1.task_id, &1.status})
+      assert status_map["queued_task"] == :running
+      assert status_map["done_task"] == :completed
+      assert status_map["fail_task"] == :failed
     end
   end
 

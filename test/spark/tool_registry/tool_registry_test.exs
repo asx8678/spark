@@ -41,6 +41,7 @@ defmodule Spark.ToolRegistryTest do
 
     test "rejects duplicate names without replace" do
       Spark.ToolRegistry.register(Spark.ToolRegistryTest.StubTool)
+
       assert {:error, {:already_registered, "stub_tool"}} =
                Spark.ToolRegistry.register(Spark.ToolRegistryTest.StubTool)
     end

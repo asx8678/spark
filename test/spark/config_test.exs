@@ -19,9 +19,11 @@ defmodule Spark.ConfigTest do
 
     on_exit(fn ->
       Application.put_env(:spark, :home_dir, original_home)
+
       if pid = Process.whereis(Spark.Config) do
         Agent.stop(pid)
       end
+
       File.rm_rf!(tmp_dir)
     end)
 
@@ -41,6 +43,7 @@ defmodule Spark.ConfigTest do
       Config.ensure_home!()
 
       expected_dirs = ~w(sessions memory tools prompts policy guidance logs cache)
+
       for dir <- expected_dirs do
         assert File.dir?(Path.join(tmp_dir, dir)), "Missing directory: #{dir}"
       end

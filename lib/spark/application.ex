@@ -13,16 +13,18 @@ defmodule Spark.Application do
     - Spark.HotReload.Coordinator (GenServer)
     - Spark.HotReload.Watcher (GenServer, conditional)
     - Spark.Workspace.LockManager (GenServer)
-    - Spark.Guidance (GenServer)
+    - Spark.ExecutionSupervisor (:rest_for_one subtree, prod only)
+      - Spark.Guidance (GenServer)
+      - Spark.Dispatcher (GenServer)
+      - Spark.Orchestrator (GenServer)
     - Spark.ToolSupervisor (Task.Supervisor)
     - Spark.WorkerSupervisor (DynamicSupervisor)
-    - Spark.Dispatcher (GenServer, prod only)
-    - Spark.Orchestrator (GenServer, prod only)
   """
 
   use Application
 
   @impl true
+  @spec start(Application.start_type(), term()) :: {:ok, pid()} | {:error, term()}
   def start(_type, _args) do
     # Ensure home directory exists on boot
     Spark.Config.ensure_home!()
@@ -51,14 +53,10 @@ defmodule Spark.Application do
           # Workspace safety (spark-57y.1)
           {Spark.Workspace.LockManager, []},
 
-          # Guidance system (spark-31u.1)
-          {Spark.Guidance, []},
-
-          # Dispatcher (spark-u4b.1–u4b.6)
-          {Spark.Dispatcher, []},
-
-          # Orchestrator (spark-anh.1–anh.6)
-          {Spark.Orchestrator, []}
+          # Execution subtree: Guidance → Dispatcher → Orchestrator
+          # :rest_for_one — if Dispatcher crashes, Orchestrator restarts
+          # too (re-syncs state). See Spark.ExecutionSupervisor.
+          {Spark.ExecutionSupervisor, []}
         ]
       end
 
@@ -66,14 +64,24 @@ defmodule Spark.Application do
       [
         # Registries
         {Registry, keys: :unique, name: Spark.SessionRegistry},
-        # spark-pl3.2: ToolRegistry as GenServer
-        {Spark.ToolRegistry, []},
+        # spark-pl3.2: ToolRegistry as GenServer (registers built-in tools on init)
+        {Spark.ToolRegistry, [register_defaults: true]},
 
         # PubSub (spark-bny.1)
         {Phoenix.PubSub, name: Spark.PubSub},
 
+        # HTTP connection pool — starts in all envs so LLM calls work
+        {Finch,
+         name: Spark.FinchPool,
+         pools: %{"https://pass.wafer.ai" => [size: 20], default: [size: 10]}},
+
+        # LLM resilience: circuit breaker + rate limiter (ETS table owners)
+        {Spark.LLM.CircuitBreaker, []},
+        {Spark.LLM.RateLimiter, []},
+
         # Config & secrets (spark-ega.6, spark-ega.7) — idempotent start
         maybe_agent_child(Spark.Config),
+        maybe_agent_child(Spark.Config.Secrets),
         maybe_agent_child(Spark.Policy),
         maybe_agent_child(Spark.Prompt.Store),
 
@@ -81,10 +89,15 @@ defmodule Spark.Application do
         {Task.Supervisor, name: Spark.ToolSupervisor},
 
         # Worker pool (spark-pvp.1)
-        {DynamicSupervisor, name: Spark.WorkerSupervisor, strategy: :one_for_one,
-         max_restarts: 100, max_seconds: 5}
+        {DynamicSupervisor,
+         name: Spark.WorkerSupervisor, strategy: :one_for_one, max_restarts: 100, max_seconds: 5}
       ] ++ prod_children
 
+    # Shutdown order: children terminate in reverse start order when the
+    # supervisor stops. Within the ExecutionSupervisor subtree, Orchestrator
+    # drains first, then Dispatcher, then Guidance — ensuring workers finish
+    # before their dispatcher.  For graceful TUI shutdown, Spark.Dispatcher.drain/1
+    # is called explicitly before the supervisor tears down.
     opts = [strategy: :one_for_one, name: Spark.Supervisor]
     Supervisor.start_link(children, opts)
   end
