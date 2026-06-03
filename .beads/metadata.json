@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "spark",
-  "project_id": "29ea722b-ba18-4f3c-bc60-8e4dc1322b53"
-}
