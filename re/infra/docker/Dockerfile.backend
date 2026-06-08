@@ -1,0 +1,51 @@
+# Stage 1: Build
+FROM elixir:1.17-otp-26-slim AS builder
+
+# Install build dependencies (git for hex deps, build-essential for native extensions)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      git \
+      build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install hex and rebar non-interactively
+RUN mix do local.hex --force, local.rebar --force
+
+# Copy dependency manifests first for better layer caching
+COPY backend/mix.exs backend/mix.lock ./
+RUN mix deps.get --only prod
+RUN mix deps.compile
+
+# Copy application source and compile
+COPY backend/lib ./lib
+COPY backend/config ./config
+RUN mix compile
+RUN mix release
+
+# Stage 2: Runtime
+FROM elixir:1.17-otp-26-slim AS runtime
+
+# Install runtime dependencies (openssl for crypto, ca-certificates for HTTPS)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      openssl \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Create non-root user to run the release
+RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app
+
+# Copy the release from the builder stage
+COPY --from=builder --chown=app:app /app/_build/prod/rel/immo_backend ./
+
+USER app
+
+# Expose Phoenix default port
+EXPOSE 4000
+
+# Start the release
+CMD ["bin/immo_backend", "start"]

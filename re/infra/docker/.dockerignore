@@ -1,0 +1,12 @@
+.git
+.github
+node_modules
+deps
+_build
+frontend
+infra
+README.md
+tmp
+*.log
+.env
+.env.*
