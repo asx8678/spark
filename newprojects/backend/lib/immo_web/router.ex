@@ -84,18 +84,33 @@ defmodule ImmoWeb.Router do
 
   ## Admin (LiveView) — §6.2
 
-  # P1-E1.1 delivers the auth/RBAC substrate. The actual admin surfaces
-  # for catalog/CRM/billing/builds are the children of P1-E1.2 / P1-E3 /
-  # P3-E2. This scope mounts the auth gates and a minimal landing page
-  # so the role machinery has somewhere to live and so the P1-E1.1 ACs
-  # (role matrix integration-tested, session idle timeout, seed admin
-  # login) are all exercise-able end-to-end.
+  # P1-E1.1 delivers the auth/RBAC substrate. P1-E1.3 adds the
+  # per-surface routes (P1-E1.3 acceptance suite uses them to
+  # assert the role×surface matrix end-to-end). The real admin
+  # CRUD surfaces (catalog/CRM/billing/builds) are P1-E3 / P3-E2.
+
   scope "/admin", ImmoWeb do
     pipe_through [:admin_browser]
 
-    live_session :admin_any_staff,
+    # The admin landing — visible to any signed-in staff member.
+    live_session :admin_landing,
       on_mount: [{ImmoWeb.UserAuth, :require_any_staff}] do
       live "/", AdminLive, :index
+    end
+
+    # Per-surface stub routes. P1-E1.3 mounts `ImmoWeb.SurfaceLive` at
+    # a single path with a `:surface` URL param so the same LiveView
+    # can render whichever surface the live_session is gated for.
+    # The on_mount hook is the surface-specific gate. The URL
+    # surface segment is also projected into the LiveView session so
+    # handle_params/3 (Phoenix LiveView 1.1 does not surface
+    # path_params to handle_params) can read it.
+    for surface <- Immo.Accounts.Scope.surfaces() do
+      live_session :"admin_#{surface}",
+        on_mount: [{ImmoWeb.UserAuth, {:require_surface, surface}}],
+        session: %{"surface" => Atom.to_string(surface)} do
+        live "/surface/#{surface}", SurfaceLive, :index
+      end
     end
   end
 end
