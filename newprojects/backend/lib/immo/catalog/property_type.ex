@@ -35,7 +35,7 @@ defmodule Immo.Catalog.PropertyType do
     field :key, :string
     field :label, :map
     field :url_segment, :map
-    field :filter_config, :map
+    field :filter_config, {:array, :map}
     field :schema_hints, :map
     field :position, :integer
 

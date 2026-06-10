@@ -84,3 +84,8 @@ case Accounts.get_user_by_email(dev_user_email) do
   %Accounts.User{} ->
     IO.puts("[seed] developer_user #{dev_user_email} already present, skipping")
 end
+
+# P1-E2.6 — Realistic catalog seed (≥3 property types, ≥40 listings,
+# fr/ar content, developers with active subscriptions, custom fields
+# for apartment). Idempotent: short-circuits on a re-run.
+Immo.CatalogSeeds.run()
