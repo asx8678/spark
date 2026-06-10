@@ -17,13 +17,12 @@ defmodule Immo.Catalog.Redirect do
   in P1-E2.2 will:
     1. refuse the edit if the entity is published and the caller is
        not an admin (per §3.8 default + admin override)
-    2. if the edit proceeds, write a `Redirect` here, mark the old
-       path dirty in KV (P1-E2.5), and the SSR catch-all consults
-       redirects via API to serve 301 immediately until the next
-       build.
+    2. if the edit proceeds, write a `Redirect` here via
+       `Immo.Catalog.record_slug_redirect/4` transactionally.
   """
 
   use Ecto.Schema
+  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -35,5 +34,13 @@ defmodule Immo.Catalog.Redirect do
     field :reason, :string
 
     timestamps(type: :utc_datetime)
+  end
+
+  def create_changeset(redirect, attrs) do
+    redirect
+    |> cast(attrs, [:old_path, :new_path, :http_status, :reason])
+    |> validate_required([:old_path, :new_path])
+    |> validate_inclusion(:http_status, [301, 302, 307, 308])
+    |> unique_constraint(:old_path)
   end
 end
