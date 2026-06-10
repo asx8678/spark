@@ -58,5 +58,10 @@ defmodule ImmoWeb.Endpoint do
   plug Plug.MethodOverride
   plug Plug.Head
   plug Plug.Session, @session_options
+  # §6.3 — rewrite 4xx/5xx application/json responses to
+  # application/problem+json (RFC 9457). Must run AFTER Plug.Session
+  # (so it sees the final response) and BEFORE the router (so it
+  # applies to all controller-rendered errors too).
+  plug ImmoWeb.Plugs.ProblemJsonContentType
   plug ImmoWeb.Router
 end

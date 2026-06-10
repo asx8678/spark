@@ -17,6 +17,28 @@ defmodule ImmoWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # §6.4 — machine-token auth tiers for /api/v1. Three pipelines:
+  #   :api_build   — BearerAuth :build, full paginated dumps
+  #   :api_render  — BearerAuth :render, single-record reads
+  #   :api_public  — CORS + Hammer rate limit (P1-E5.4), no auth
+  # Scopes are disjoint: a render token never authenticates on a
+  # build endpoint, and vice versa. The plug's init/1 fixes the
+  # scope from the pipeline, never infers it from the token.
+  pipeline :api_build do
+    plug :accepts, ["json"]
+    plug ImmoWeb.Plugs.BearerAuth, :build
+  end
+
+  pipeline :api_render do
+    plug :accepts, ["json"]
+    plug ImmoWeb.Plugs.BearerAuth, :render
+  end
+
+  pipeline :api_public do
+    plug :accepts, ["json"]
+    # CORS + Hammer rate-limit plug live in P1-E5.4.
+  end
+
   # §6.2 admin: every route under /admin requires the user to be
   # authenticated. Per-surface role gating is layered on top via
   # `live_session :on_mount` and the `require_role/1` plug.
@@ -112,5 +134,29 @@ defmodule ImmoWeb.Router do
         live "/surface/#{surface}", SurfaceLive, :index
       end
     end
+  end
+
+  # §6.4 / §6.3 — /api/v1 read API. The three pipelines are wired
+  # here so the auth + CORS + rate-limit surface is in place from
+  # P1-E5.1; the actual endpoints land in P1-E5.2 (build),
+  # P1-E5.3 (render), and P1-E5.4 (public).
+  #
+  # Each tier gets a /__smoke route mounted on its own controller
+  # so the AC (auth tiers, rotation, scope disjointness) is
+  # testable end-to-end without the real endpoints being in place.
+  # The smoke route names are reserved for the test suite.
+  scope "/api/v1", ImmoWeb.Api, as: :api_v1 do
+    pipe_through :api_build
+    get "/__smoke/build", IndexController, :index
+  end
+
+  scope "/api/v1", ImmoWeb.Api, as: :api_v1 do
+    pipe_through :api_render
+    get "/__smoke/render", IndexController, :index
+  end
+
+  scope "/api/v1", ImmoWeb.Api, as: :api_v1 do
+    pipe_through :api_public
+    get "/__smoke/public", IndexController, :index
   end
 end

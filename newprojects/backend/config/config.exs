@@ -70,6 +70,14 @@ config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
 
+# §10.1 / §13 — Logger redaction of authorization headers and token
+# values. The filter function lives in Immo.LoggerRedaction (testable
+# in isolation) and is referenced by name so the rules evolve with
+# the test suite, not as a config-string that's invisible to CI.
+config :logger, :filter, [
+  {Immo.LoggerRedaction, :filtering}
+]
+
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 

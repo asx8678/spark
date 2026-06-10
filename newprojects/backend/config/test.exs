@@ -31,6 +31,8 @@ config :immo, Immo.Mailer, adapter: Swoosh.Adapters.Test
 # the gate inert for any test that does not opt in.
 config :immo, :billing_enforced, false
 
+
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 
