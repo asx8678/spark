@@ -71,7 +71,7 @@ defmodule Immo.Catalog do
       `old_path`/`new_path` strings directly.
   """
 
-  import Ecto.Query, only: [where: 3, order_by: 2]
+  import Ecto.Query, only: [where: 3, order_by: 2, limit: 2]
 
   alias Immo.Accounts.Scope
   alias Immo.Audit
@@ -81,8 +81,8 @@ defmodule Immo.Catalog do
     CustomField,
     Developer,
     Listing,
-    PropertyType,
     Project,
+    PropertyType,
     Redirect
   }
 
@@ -826,4 +826,288 @@ defmodule Immo.Catalog do
   defp preload_assoc(listing, :property_type, _id) do
     Repo.preload(listing, property_type: [:custom_fields])
   end
+
+  ## §6.3 — Published list endpoints for the build tier
+  ## (`/api/v1/projects`, `/listings`, `/developers`,
+  ## `/property_types`). Composes `published/1` and adds
+  ## cursor (`WHERE id > ^cursor`) + `since` (ISO-8601 on
+  ## `updated_at`) + `limit` (clamped at the caller). P1-E5.2.
+
+  @doc """
+  List published developers, paginated by cursor over `id`,
+  filtered by `since` on `updated_at`. Composes `published/1`
+  so unpublished, future-published, and billing-gated records
+  are absent (§5.13).
+
+  Options:
+    * `:limit`     — page size; caller is responsible for clamping
+    * `:cursor_id` — the id of the last record from the previous
+      page; nil = first page
+    * `:since`     — `DateTime.t()`; nil = no time filter
+  """
+  @spec list_published_developers(keyword()) :: [Developer.t()]
+  def list_published_developers(opts \\ []) do
+    Developer
+    |> published()
+    |> apply_list_filters(opts)
+    |> Repo.all()
+  end
+
+  @doc """
+  List published projects, paginated by cursor over `id`,
+  filtered by `since` on `updated_at`. Composes `published/1`.
+  """
+  @spec list_published_projects(keyword()) :: [Project.t()]
+  def list_published_projects(opts \\ []) do
+    Project
+    |> published()
+    |> apply_list_filters(opts)
+    |> Repo.all()
+  end
+
+  @doc """
+  List published listings, paginated by cursor over `id`,
+  filtered by `since` on `updated_at`. Composes `published/1`.
+  """
+  @spec list_published_listings(keyword()) :: [Listing.t()]
+  def list_published_listings(opts \\ []) do
+    Listing
+    |> published()
+    |> apply_list_filters(opts)
+    |> Repo.all()
+  end
+
+  @doc """
+  List published property types (PropertyType has no
+  billing gate by design — all published property types
+  are exposed in the search island's filter sidebar).
+  """
+  @spec list_published_property_types(keyword()) :: [PropertyType.t()]
+  def list_published_property_types(opts \\ []) do
+    PropertyType
+    |> where([pt], not is_nil(pt.published_at))
+    |> where([pt], pt.published_at <= ^DateTime.utc_now(:second))
+    |> apply_list_filters_no_publish(opts)
+    |> Repo.all()
+  end
+
+  @doc """
+  List active redirects (where `http_status` is non-nil and
+  `old_path` is non-empty). Used by `/api/v1/redirects` for
+  the build-time `redirects.json` (per §3.8 / §6.3).
+  """
+  @spec list_active_redirects() :: [Redirect.t()]
+  def list_active_redirects do
+    Redirect
+    |> where([r], not is_nil(r.http_status))
+    |> where([r], r.old_path != "")
+    |> order_by(asc: :old_path)
+    |> Repo.all()
+  end
+
+  @doc """
+  Get a single **published** project by slug. Returns `nil` when:
+    * the slug does not exist, OR
+    * the slug exists but the project is unpublished / future-published /
+      billing-gated (per §5.13 — never leak the existence of a draft).
+
+  Composes `published/1` so the §5.13 predicate (incl. the billing
+  gate) is the single source of truth. Callers (the §6.3 render
+  endpoints) treat `nil` as a 404 — no distinction between
+  "doesn't exist" and "unpublished", to avoid leaking the draft
+  list to authenticated render consumers.
+  """
+  @spec get_published_project_by_slug(String.t()) :: Project.t() | nil
+  def get_published_project_by_slug(slug) when is_binary(slug) do
+    Project
+    |> published()
+    |> Repo.get_by(slug: slug)
+  end
+
+  @doc """
+  Get a single **published** developer by slug. Returns `nil` for
+  missing or non-published rows (per §5.13). Developers are not
+  billing-gated, so the predicate reduces to "published_at is in
+  the past".
+  """
+  @spec get_published_developer_by_slug(String.t()) :: Developer.t() | nil
+  def get_published_developer_by_slug(slug) when is_binary(slug) do
+    Developer
+    |> published()
+    |> Repo.get_by(slug: slug)
+  end
+
+  @doc """
+  Get a single **published** listing by `(property_type_id, slug)`.
+  Per §5.4, a listing's slug is unique within its property_type
+  namespace; the property_type segment is part of the public URL
+  (`/appartements/casablanca/...` vs `/terrains/casablanca/...`).
+
+  Returns `nil` for missing or non-published rows. Same 404-or-200
+  treatment as the developer/project lookups.
+  """
+  @spec get_published_listing(String.t(), String.t()) :: Listing.t() | nil
+  def get_published_listing(property_type_id, slug)
+      when is_binary(property_type_id) and is_binary(slug) do
+    Listing
+    |> published()
+    |> Repo.get_by(property_type_id: property_type_id, slug: slug)
+  end
+
+  @doc """
+  Get a property type by `key` (e.g. `"apartment"`, `"land"`).
+  Used by the §6.3 render endpoints to resolve the
+  `:property_type` in the URL → `property_type_id` for the
+  listing slug lookup.
+  """
+  # PropertyType has no `published_at` field — once created, a
+  # property type is considered "published" (the public URL
+  # namespace). The P1-E5.2 spec calls for adding the gate in a
+  # later phase; for now this resolves the type_key unconditionally.
+  @spec get_published_property_type_by_key(String.t()) :: PropertyType.t() | nil
+  def get_published_property_type_by_key(key) when is_binary(key) do
+    Repo.get_by(PropertyType, key: key)
+  end
+
+  @doc """
+  Order a query by `field` descending, with a `limit`. Used by
+  the §6.3 render endpoints' "recent" summary embeds (e.g. the
+  most-recently-updated published listings for a project).
+  Composes on top of an existing query — callers stack the
+  `published/1` predicate first.
+  """
+  @spec order_by_recent(Ecto.Queryable.t(), atom(), pos_integer()) :: Ecto.Queryable.t()
+  def order_by_recent(queryable, field, limit)
+      when is_atom(field) and is_integer(limit) and limit > 0 do
+    queryable
+    |> Ecto.Query.order_by(desc: ^field)
+    |> Ecto.Query.limit(^limit)
+  end
+
+  @doc """
+  Resolve a public path to a published entity's `updated_at` for
+  the §6.3 / §3.5 `/internal/freshness?path=` endpoint. The
+  endpoint is the documented KV-alternative when the §3.5 KV
+  freshness gate lags behind a publish.
+
+  Returns `{:ok, updated_at}` for a published path, `nil` for
+  missing / unpublished paths. Callers 404 on `nil` so the
+  freshness check matches the render lookups (no leak of
+  draft paths).
+
+  Path shapes (per §7.1):
+    * `/promoteurs/{slug}`        → developer
+    * `/projets/{city}/{slug}`    → project
+    * `/{type_segment}/{city}/{slug}` → listing
+
+  Anything else (root, type index, etc.) returns `nil`.
+  """
+  @spec freshness_for_path(String.t()) :: {:ok, DateTime.t()} | nil
+  def freshness_for_path(path) when is_binary(path) do
+    case resolve_path(path) do
+      {:ok, %{updated_at: %DateTime{} = ts}} -> {:ok, ts}
+      _ -> nil
+    end
+  end
+
+  # The path→entity dispatcher. Kept private so callers go through
+  # `freshness_for_path/1` (which returns a `DateTime.t()` for
+  # caller convenience) rather than touching the entity shape.
+  defp resolve_path("/promoteurs/" <> slug) do
+    case get_published_developer_by_slug(slug) do
+      nil -> nil
+      %Developer{} = d -> {:ok, d}
+    end
+  end
+
+  defp resolve_path("/projets/" <> rest) do
+    {city, slug} = parse_project_path(rest)
+    _ = city
+
+    case get_published_project_by_slug(slug) do
+      %Project{} = p -> {:ok, p}
+      nil -> nil
+    end
+  end
+
+  defp resolve_path("/" <> rest) do
+    # The remaining URL segments after the leading slash. The
+    # listing shape is `/{type_segment}/{city}/{slug}`.
+    case String.split(rest, "/", parts: 3) do
+      [type_segment, _city, slug] -> resolve_listing_path(type_segment, slug)
+      _ -> nil
+    end
+  end
+
+  defp resolve_path(_), do: nil
+
+  # Listing-path helper, split out to keep the depth budget. Looks
+  # up the property_type by its fr-locale `url_segment`, then the
+  # published listing inside that type's namespace.
+  defp resolve_listing_path(type_segment, slug) do
+    case find_property_type_by_url_segment(type_segment) do
+      %PropertyType{} = pt -> get_published_listing(pt.id, slug)
+      _ -> nil
+    end
+  end
+
+  # /projets/{city}/{slug} → ["{city}", "{slug}"]
+  defp parse_project_path(rest) do
+    case String.split(rest, "/", parts: 2) do
+      [city, slug] -> {city, slug}
+      _ -> {nil, nil}
+    end
+  end
+
+  # Resolve a type_segment to a property_type. Looks at the
+  # default-locale (`fr`) `url_segment` per §7.1 — the SSR Worker
+  # uses the `fr` segment for canonical URLs. Other locales get
+  # alternate paths; freshness check operates on the canonical
+  # one.
+  defp find_property_type_by_url_segment(nil), do: nil
+
+  defp find_property_type_by_url_segment(segment) when is_binary(segment) do
+    PropertyType
+    |> where([pt], not is_nil(pt.published_at))
+    |> where([pt], pt.published_at <= ^DateTime.utc_now(:second))
+    |> where([pt], fragment("? ->> ? = ?", pt.url_segment, ^"fr", ^segment))
+    |> Repo.one()
+  end
+
+  # Apply cursor (over id) + since (over updated_at) + limit
+  # to a query that already has the published predicate composed.
+  defp apply_list_filters(query, opts) do
+    query
+    |> apply_list_filters_no_publish(opts)
+  end
+
+  defp apply_list_filters_no_publish(query, opts) do
+    query
+    |> apply_cursor(opts[:cursor_id])
+    |> apply_since(opts[:since])
+    |> apply_limit(opts[:limit])
+    |> order_by(asc: :id)
+  end
+
+  defp apply_cursor(query, nil), do: query
+
+  defp apply_cursor(query, cursor_id) when is_binary(cursor_id) do
+    where(query, [r], r.id > ^cursor_id)
+  end
+
+  defp apply_since(query, nil), do: query
+
+  defp apply_since(query, %DateTime{} = since) do
+    where(query, [r], r.updated_at > ^since)
+  end
+
+  defp apply_limit(query, nil), do: query
+
+  defp apply_limit(query, limit) when is_integer(limit) and limit > 0 do
+    # Fetch limit+1 so the pagination layer can detect "is there
+    # another page?" without a count query.
+    limit(query, ^Kernel.+(limit, 1))
+  end
+
+  defp apply_limit(query, _), do: query
 end

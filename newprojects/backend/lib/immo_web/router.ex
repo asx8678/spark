@@ -148,11 +148,25 @@ defmodule ImmoWeb.Router do
   scope "/api/v1", ImmoWeb.Api, as: :api_v1 do
     pipe_through :api_build
     get "/__smoke/build", IndexController, :index
+    # §6.3 build-tier list endpoints
+    get "/projects", BuildController, :projects
+    get "/listings", BuildController, :listings
+    get "/developers", BuildController, :developers
+    get "/property_types", BuildController, :property_types
+    get "/meta/sitemap", BuildController, :sitemap
+    get "/redirects", BuildController, :redirects
   end
 
   scope "/api/v1", ImmoWeb.Api, as: :api_v1 do
     pipe_through :api_render
     get "/__smoke/render", IndexController, :index
+
+    # §6.3 — render tier single-record reads (RENDER_TOKEN,
+    # §10.1 path 2). P1-E5.3.
+    get "/projects/:slug", RenderController, :project
+    get "/listings/:type_key/:slug", RenderController, :listing
+    get "/developers/:slug", RenderController, :developer
+    get "/internal/freshness", RenderController, :freshness
   end
 
   scope "/api/v1", ImmoWeb.Api, as: :api_v1 do
