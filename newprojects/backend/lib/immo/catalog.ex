@@ -22,6 +22,12 @@ defmodule Immo.Catalog do
 
   Plus the tenant-scoping helper `scoped_query/2` from P1-E1.2.
 
+  Every mutation writes an `audit_log` row via `Immo.Audit.log_mutation/1`
+  in the **same transaction** as the mutation. Pass `:actor_user` in
+  the `opts` keyword list to record who performed the change
+  (§5.12). Rollback of the mutation rolls the audit back too — the
+  spec is explicit about atomic commit.
+
   ## §5.13 publish predicate (P1-E2.3)
 
   `Catalog.published/1` is the single composable definition of
@@ -55,9 +61,10 @@ defmodule Immo.Catalog do
   apply the filter at the query level. Staff roles get unfiltered
   queries.
 
-  ## Out of scope (P1-E2.2 / P1-E2.3)
+  ## Out of scope (P1-E2.2 / P1-E2.3 / P1-E2.4)
 
-    * `audit_log` wrapping of every mutation (P1-E2.4).
+    * The `audit_log` viewer UI — P1-E3.5 (the read API is in
+      `Immo.Audit.list_recent/1` etc., ready for the viewer).
     * KV dirty-marking on publish/unpublish/slug change (P4).
     * The `Immo.Edge.Paths` single-path authority for old/new path
       strings (P1-E5.2). For P1-E2.2, the caller passes
@@ -67,6 +74,7 @@ defmodule Immo.Catalog do
   import Ecto.Query, only: [where: 3, order_by: 2]
 
   alias Immo.Accounts.Scope
+  alias Immo.Audit
   alias Immo.Repo
 
   alias Immo.Catalog.{
@@ -111,34 +119,6 @@ defmodule Immo.Catalog do
   is off, the gate is inert and any past-published row is
   "published" (D13 — launch posture until the first paying customer
   flips the flag).
-
-  ## Examples
-
-      # Sitemap
-      Project |> Catalog.published() |> Repo.all()
-
-      # Read API
-      Listing
-      |> Catalog.published()
-      |> where(city: ^city)
-      |> order_by(desc: :published_at)
-      |> Repo.all()
-
-      # Skip-if-unchanged (P3)
-      max_published_at =
-        Listing
-        |> Catalog.published()
-        |> select([l], max(l.published_at))
-        |> Repo.one()
-
-  ## Caller contract
-
-  No re-implementation. If a query needs the publish filter, it
-  composes `Catalog.published/1`. The §5.13 sentence
-  ("No second definition anywhere") is enforced by code review
-  and the §15.1 matrix test suite — if a new caller introduces
-  a parallel `where: p.published_at <= ^now` clause, that test
-  must explain why.
   """
   @spec published(Ecto.Queryable.t()) :: Ecto.Queryable.t()
   def published(queryable) when is_atom(queryable) do
@@ -167,20 +147,12 @@ defmodule Immo.Catalog do
         |> apply_listing_billing_gate()
 
       _ ->
-        # Caller passed a query whose source is not one of the
-        # known schemas. Rather than silently fail-closed, raise
-        # — the spec requires the predicate to be a single
-        # definition, so we don't recognize a query that bypasses
-        # our dispatch.
         raise ArgumentError,
               "Catalog.published/1 only supports Developer, Project, and Listing queries. " <>
                 "Got query with unknown source."
     end
   end
 
-  # The schema-module entry point. When callers pass a bare module
-  # atom, we synthesize a base query (the spec shape is a queryable,
-  # which is a schema module OR a query).
   defp do_published(Developer) do
     Developer
     |> where_published_at_clause(:developer)
@@ -199,9 +171,6 @@ defmodule Immo.Catalog do
     |> apply_listing_billing_gate()
   end
 
-  # The base §5.13 published_at clause. The `source` arg is the
-  # canonical source-binding atom for the table being filtered; the
-  # `where/3` call below uses the right binding for that source.
   defp where_published_at_clause(query, source) do
     case source do
       :developer ->
@@ -215,35 +184,15 @@ defmodule Immo.Catalog do
     end
   end
 
-  # Per §5.13, developers are NOT billing-gated. The developer
-  # publish predicate is just the published_at clause.
   defp apply_developer_billing_gate(query), do: query
 
-  # Project billing gate (§5.13):
-  #   - When BILLING_ENFORCED is OFF: gate is inert. All
-  #     past-published projects are published regardless of
-  #     subscription state.
-  #   - When BILLING_ENFORCED is ON: project is published only if
-  #     the owning developer has at least one subscription row with
-  #     status in ('active', 'trialing'). Implemented as an EXISTS
-  #     subquery correlated to the outer projects.developer_id via
-  #     an Ecto `parent_as/1` reference. `parent_as(:projects)`
-  #     names the source table of the outer query (Ecto gives the
-  #     source the name of the schema, lowercase + s).
   defp apply_project_billing_gate(query) do
     if billing_enforced?() do
-      # Fragment-based correlated subquery: the fragment sees the
-      # outer `p` binding as a raw SQL column reference, sidestepping
-      # Ecto's hygiene around outer-binding capture in subqueries.
-      # The SQL is parameterised: `?` binds the outer projects.id
-      # safely. (Using `p.developer_id` directly in the fragment
-      # would also work since the outer query provides the binding
-      # in scope at the `where` call site.)
       where(
         query,
         [p],
         fragment(
-          "EXISTS (SELECT 1 FROM subscriptions s WHERE s.developer_id = ? AND s.status IN (\'active\', \'trialing\'))",
+          "EXISTS (SELECT 1 FROM subscriptions s WHERE s.developer_id = ? AND s.status IN ('active', 'trialing'))",
           p.developer_id
         )
       )
@@ -252,27 +201,13 @@ defmodule Immo.Catalog do
     end
   end
 
-  # Listing billing gate (§5.13):
-  #   - The owning developer of a listing is the developer of its
-  #     project. A standalone listing (project_id IS NULL) has no
-  #     owning developer → with BILLING_ENFORCED on, a standalone
-  #     listing is excluded (the join through `project` is
-  #     impossible). The §5.13 principle: the only path to a
-  #     published listing under enforced billing is a published
-  #     project under a subscribed developer.
   defp apply_listing_billing_gate(query) do
     if billing_enforced?() do
-      # Listings don't have a direct developer_id; the path is
-      # listing → project → developer → subscription. The join
-      # chain is two hops. We use a fragment for the EXISTS
-      # subquery: the fragment sees the outer `l` and `p` bindings
-      # as raw SQL columns, sidestepping Ecto's hygiene around
-      # outer-binding capture in subqueries.
       where(
         query,
         [l],
         fragment(
-          "EXISTS (SELECT 1 FROM subscriptions s JOIN projects p ON p.id = ? WHERE s.developer_id = p.developer_id AND s.status IN (\'active\', \'trialing\'))",
+          "EXISTS (SELECT 1 FROM subscriptions s JOIN projects p ON p.id = ? WHERE s.developer_id = p.developer_id AND s.status IN ('active', 'trialing'))",
           l.project_id
         )
       )
@@ -281,39 +216,12 @@ defmodule Immo.Catalog do
     end
   end
 
-  # The §5.13 future-publish guard. `published_at <= now()` is the
-  # "scheduled publish" carve-out: admins can set a future timestamp
-  # and the row stays unpublished until that moment. We compute
-  # `now()` once per call so the query is deterministic within a
-  # single request (and the test suite can substitute a fixed
-  # instant in time without time-mocking).
   defp now_unix, do: DateTime.utc_now(:second)
 
   ## Tenant scoping (P1-E1.2)
 
   @doc """
   Apply tenant scoping to a queryable. See the moduledoc for the rules.
-
-  ## Arguments
-
-    * `queryable` — an Ecto queryable (a schema module, `%Ecto.Query{}`,
-      or any value `Ecto.Queryable` accepts).
-    * `scope` — an `Immo.Accounts.Scope` (or `nil` for unauthenticated).
-
-  ## Returns
-
-    The original queryable, with an extra `WHERE developer_id = ^
-  scope.tenant_id` clause appended for `developer_user` scopes, and
-  unchanged for staff scopes (and `nil`).
-
-  ## Raises
-
-    `ArgumentError` if the queryable's underlying schema does not
-  declare a `developer_id` field. This is intentional: a missing
-  `developer_id` would silently let a `developer_user` see all rows
-  through the `scoped_query/2` filter (the WHERE clause would compare
-  to a column that doesn't exist or, worse, no-op if Ecto silently
-  ignores it). The fail-fast check is a §5.8 safety net.
   """
   @spec scoped_query(Ecto.Queryable.t(), Scope.t() | nil) :: Ecto.Queryable.t()
   def scoped_query(queryable, %Scope{role: :developer_user, developer_id: tenant_id})
@@ -332,11 +240,7 @@ defmodule Immo.Catalog do
     if schema && not schema_has_developer_id?(schema) do
       raise ArgumentError,
             "Immo.Catalog.scoped_query/2 called on #{inspect(schema)}, which " <>
-              "does not declare a `:developer_id` field. Developer-user " <>
-              "tenant scoping (§5.8) is impossible without it. Add " <>
-              "`field :developer_id, :binary_id` (or the appropriate FK " <>
-              "type) to the schema, or pass the query through a wrapper " <>
-              "that joins a related table that does have one."
+              "does not declare a `:developer_id` field."
     end
   end
 
@@ -376,27 +280,49 @@ defmodule Immo.Catalog do
     |> Repo.all()
   end
 
-  @doc "Create a developer (draft; `published_at` is nil)."
+  @doc """
+  Create a developer (draft; `published_at` is nil). Writes an
+  `audit_log` row in the same transaction.
+  """
   def create_developer(attrs, opts \\ []) do
-    %Developer{}
-    |> Developer.create_changeset(attrs)
-    |> Repo.insert()
-    |> maybe_audit(opts, "create", "Developer")
+    Repo.transact(fn ->
+      with {:ok, developer} <-
+             %Developer{} |> Developer.create_changeset(attrs) |> Repo.insert(),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "create",
+               entity: developer,
+               diff: Audit.create_diff(developer)
+             ) do
+        {:ok, developer}
+      end
+    end)
   end
 
   @doc """
   Update a developer. Pass `:actor_role` in `opts` to enable the
-  §3.8 admin override. On a permitted slug change, the caller is
-  expected to have wrapped the call in `record_slug_redirect/4` so
-  the redirects row is written transactionally.
+  §3.8 admin override. Writes an `audit_log` row in the same
+  transaction with the field-level diff (§5.12).
   """
   def update_developer(developer, attrs, opts \\ []) do
     actor_role = Keyword.get(opts, :actor_role)
+    old = developer
 
-    developer
-    |> Developer.update_changeset(attrs, actor_role: actor_role)
-    |> Repo.update()
-    |> maybe_audit(opts, "update", "Developer")
+    Repo.transact(fn ->
+      cs = Developer.update_changeset(developer, attrs, actor_role: actor_role)
+
+      with {:ok, updated} <- Repo.update(cs),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "update",
+               entity: updated,
+               diff: Audit.update_diff(old, updated, cs)
+             ) do
+        {:ok, updated}
+      end
+    end)
   end
 
   @doc "Publish a developer (sets `published_at` to now). Idempotent."
@@ -404,10 +330,23 @@ defmodule Immo.Catalog do
     if developer.published_at do
       {:ok, developer}
     else
-      developer
-      |> change_published_at(DateTime.utc_now(:second))
-      |> Repo.update()
-      |> maybe_audit(opts, "publish", "Developer")
+      Repo.transact(fn ->
+        updated = change_published_at(developer, DateTime.utc_now(:second)) |> Repo.update!()
+
+        Audit.log_mutation(
+          actor_user: opts[:actor_user],
+          action: "publish",
+          entity: updated,
+          diff:
+            Audit.update_diff(
+              developer,
+              updated,
+              Ecto.Changeset.change(developer, %{published_at: updated.published_at})
+            )
+        )
+
+        {:ok, updated}
+      end)
     end
   end
 
@@ -416,17 +355,43 @@ defmodule Immo.Catalog do
     if is_nil(developer.published_at) do
       {:ok, developer}
     else
-      developer
-      |> change_published_at(nil)
-      |> Repo.update()
-      |> maybe_audit(opts, "unpublish", "Developer")
+      Repo.transact(fn ->
+        updated = change_published_at(developer, nil) |> Repo.update!()
+
+        Audit.log_mutation(
+          actor_user: opts[:actor_user],
+          action: "unpublish",
+          entity: updated,
+          diff:
+            Audit.update_diff(
+              developer,
+              updated,
+              Ecto.Changeset.change(developer, %{published_at: nil})
+            )
+        )
+
+        {:ok, updated}
+      end)
     end
   end
 
-  @doc "Delete a developer. The DB-level FK on `users.developer_id` will reject if any user is bound."
+  @doc """
+  Delete a developer. The DB-level FK on `users.developer_id` will
+  reject if any user is bound. Writes an `audit_log` row.
+  """
   def delete_developer(developer, opts \\ []) do
-    Repo.delete(developer)
-    |> maybe_audit(opts, "delete", "Developer")
+    Repo.transact(fn ->
+      with {:ok, _} <- Repo.delete(developer),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "delete",
+               entity: developer,
+               diff: Audit.delete_diff(developer)
+             ) do
+        {:ok, developer}
+      end
+    end)
   end
 
   ## Projects
@@ -448,29 +413,62 @@ defmodule Immo.Catalog do
   end
 
   def create_project(attrs, opts \\ []) do
-    %Project{}
-    |> Project.create_changeset(attrs)
-    |> Repo.insert()
-    |> maybe_audit(opts, "create", "Project")
+    Repo.transact(fn ->
+      with {:ok, project} <-
+             %Project{} |> Project.create_changeset(attrs) |> Repo.insert(),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "create",
+               entity: project,
+               diff: Audit.create_diff(project)
+             ) do
+        {:ok, project}
+      end
+    end)
   end
 
   def update_project(project, attrs, opts \\ []) do
     actor_role = Keyword.get(opts, :actor_role)
+    old = project
 
-    project
-    |> Project.update_changeset(attrs, actor_role: actor_role)
-    |> Repo.update()
-    |> maybe_audit(opts, "update", "Project")
+    Repo.transact(fn ->
+      cs = Project.update_changeset(project, attrs, actor_role: actor_role)
+
+      with {:ok, updated} <- Repo.update(cs),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "update",
+               entity: updated,
+               diff: Audit.update_diff(old, updated, cs)
+             ) do
+        {:ok, updated}
+      end
+    end)
   end
 
   def publish_project(project, opts \\ []) do
     if project.published_at do
       {:ok, project}
     else
-      project
-      |> change_published_at(DateTime.utc_now(:second))
-      |> Repo.update()
-      |> maybe_audit(opts, "publish", "Project")
+      Repo.transact(fn ->
+        updated = change_published_at(project, DateTime.utc_now(:second)) |> Repo.update!()
+
+        Audit.log_mutation(
+          actor_user: opts[:actor_user],
+          action: "publish",
+          entity: updated,
+          diff:
+            Audit.update_diff(
+              project,
+              updated,
+              Ecto.Changeset.change(project, %{published_at: updated.published_at})
+            )
+        )
+
+        {:ok, updated}
+      end)
     end
   end
 
@@ -478,16 +476,39 @@ defmodule Immo.Catalog do
     if is_nil(project.published_at) do
       {:ok, project}
     else
-      project
-      |> change_published_at(nil)
-      |> Repo.update()
-      |> maybe_audit(opts, "unpublish", "Project")
+      Repo.transact(fn ->
+        updated = change_published_at(project, nil) |> Repo.update!()
+
+        Audit.log_mutation(
+          actor_user: opts[:actor_user],
+          action: "unpublish",
+          entity: updated,
+          diff:
+            Audit.update_diff(
+              project,
+              updated,
+              Ecto.Changeset.change(project, %{published_at: nil})
+            )
+        )
+
+        {:ok, updated}
+      end)
     end
   end
 
   def delete_project(project, opts \\ []) do
-    Repo.delete(project)
-    |> maybe_audit(opts, "delete", "Project")
+    Repo.transact(fn ->
+      with {:ok, _} <- Repo.delete(project),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "delete",
+               entity: project,
+               diff: Audit.delete_diff(project)
+             ) do
+        {:ok, project}
+      end
+    end)
   end
 
   ## Listings
@@ -510,31 +531,68 @@ defmodule Immo.Catalog do
   end
 
   def create_listing(attrs, opts \\ []) do
-    %Listing{}
-    |> preload_associations(attrs)
-    |> Listing.create_changeset(attrs)
-    |> Repo.insert()
-    |> maybe_audit(opts, "create", "Listing")
+    Repo.transact(fn ->
+      with {:ok, listing} <-
+             %Listing{}
+             |> preload_associations(attrs)
+             |> Listing.create_changeset(attrs)
+             |> Repo.insert(),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "create",
+               entity: listing,
+               diff: Audit.create_diff(listing)
+             ) do
+        {:ok, listing}
+      end
+    end)
   end
 
   def update_listing(listing, attrs, opts \\ []) do
     actor_role = Keyword.get(opts, :actor_role)
+    old = listing
 
-    listing
-    |> preload_associations(attrs)
-    |> Listing.update_changeset(attrs, actor_role: actor_role)
-    |> Repo.update()
-    |> maybe_audit(opts, "update", "Listing")
+    Repo.transact(fn ->
+      cs =
+        listing
+        |> preload_associations(attrs)
+        |> Listing.update_changeset(attrs, actor_role: actor_role)
+
+      with {:ok, updated} <- Repo.update(cs),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "update",
+               entity: updated,
+               diff: Audit.update_diff(old, updated, cs)
+             ) do
+        {:ok, updated}
+      end
+    end)
   end
 
   def publish_listing(listing, opts \\ []) do
     if listing.published_at do
       {:ok, listing}
     else
-      listing
-      |> change_published_at(DateTime.utc_now(:second))
-      |> Repo.update()
-      |> maybe_audit(opts, "publish", "Listing")
+      Repo.transact(fn ->
+        updated = change_published_at(listing, DateTime.utc_now(:second)) |> Repo.update!()
+
+        Audit.log_mutation(
+          actor_user: opts[:actor_user],
+          action: "publish",
+          entity: updated,
+          diff:
+            Audit.update_diff(
+              listing,
+              updated,
+              Ecto.Changeset.change(listing, %{published_at: updated.published_at})
+            )
+        )
+
+        {:ok, updated}
+      end)
     end
   end
 
@@ -542,16 +600,39 @@ defmodule Immo.Catalog do
     if is_nil(listing.published_at) do
       {:ok, listing}
     else
-      listing
-      |> change_published_at(nil)
-      |> Repo.update()
-      |> maybe_audit(opts, "unpublish", "Listing")
+      Repo.transact(fn ->
+        updated = change_published_at(listing, nil) |> Repo.update!()
+
+        Audit.log_mutation(
+          actor_user: opts[:actor_user],
+          action: "unpublish",
+          entity: updated,
+          diff:
+            Audit.update_diff(
+              listing,
+              updated,
+              Ecto.Changeset.change(listing, %{published_at: nil})
+            )
+        )
+
+        {:ok, updated}
+      end)
     end
   end
 
   def delete_listing(listing, opts \\ []) do
-    Repo.delete(listing)
-    |> maybe_audit(opts, "delete", "Listing")
+    Repo.transact(fn ->
+      with {:ok, _} <- Repo.delete(listing),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "delete",
+               entity: listing,
+               diff: Audit.delete_diff(listing)
+             ) do
+        {:ok, listing}
+      end
+    end)
   end
 
   ## Property types
@@ -572,22 +653,53 @@ defmodule Immo.Catalog do
   end
 
   def create_property_type(attrs, opts \\ []) do
-    %PropertyType{}
-    |> PropertyType.create_changeset(attrs)
-    |> Repo.insert()
-    |> maybe_audit(opts, "create", "PropertyType")
+    Repo.transact(fn ->
+      with {:ok, property_type} <-
+             %PropertyType{} |> PropertyType.create_changeset(attrs) |> Repo.insert(),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "create",
+               entity: property_type,
+               diff: Audit.create_diff(property_type)
+             ) do
+        {:ok, property_type}
+      end
+    end)
   end
 
   def update_property_type(property_type, attrs, opts \\ []) do
-    property_type
-    |> PropertyType.update_changeset(attrs)
-    |> Repo.update()
-    |> maybe_audit(opts, "update", "PropertyType")
+    old = property_type
+
+    Repo.transact(fn ->
+      cs = PropertyType.update_changeset(property_type, attrs)
+
+      with {:ok, updated} <- Repo.update(cs),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "update",
+               entity: updated,
+               diff: Audit.update_diff(old, updated, cs)
+             ) do
+        {:ok, updated}
+      end
+    end)
   end
 
   def delete_property_type(property_type, opts \\ []) do
-    Repo.delete(property_type)
-    |> maybe_audit(opts, "delete", "PropertyType")
+    Repo.transact(fn ->
+      with {:ok, _} <- Repo.delete(property_type),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "delete",
+               entity: property_type,
+               diff: Audit.delete_diff(property_type)
+             ) do
+        {:ok, property_type}
+      end
+    end)
   end
 
   ## Custom fields (§5.5 / R9)
@@ -601,22 +713,53 @@ defmodule Immo.Catalog do
   end
 
   def create_custom_field(attrs, opts \\ []) do
-    %CustomField{}
-    |> CustomField.create_changeset(attrs)
-    |> Repo.insert()
-    |> maybe_audit(opts, "create", "CustomField")
+    Repo.transact(fn ->
+      with {:ok, custom_field} <-
+             %CustomField{} |> CustomField.create_changeset(attrs) |> Repo.insert(),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "create",
+               entity: custom_field,
+               diff: Audit.create_diff(custom_field)
+             ) do
+        {:ok, custom_field}
+      end
+    end)
   end
 
   def update_custom_field(custom_field, attrs, opts \\ []) do
-    custom_field
-    |> CustomField.update_changeset(attrs)
-    |> Repo.update()
-    |> maybe_audit(opts, "update", "CustomField")
+    old = custom_field
+
+    Repo.transact(fn ->
+      cs = CustomField.update_changeset(custom_field, attrs)
+
+      with {:ok, updated} <- Repo.update(cs),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "update",
+               entity: updated,
+               diff: Audit.update_diff(old, updated, cs)
+             ) do
+        {:ok, updated}
+      end
+    end)
   end
 
   def delete_custom_field(custom_field, opts \\ []) do
-    Repo.delete(custom_field)
-    |> maybe_audit(opts, "delete", "CustomField")
+    Repo.transact(fn ->
+      with {:ok, _} <- Repo.delete(custom_field),
+           :ok <-
+             Audit.log_mutation(
+               actor_user: opts[:actor_user],
+               action: "delete",
+               entity: custom_field,
+               diff: Audit.delete_diff(custom_field)
+             ) do
+        {:ok, custom_field}
+      end
+    end)
   end
 
   ## Slug-change side effect (§3.8)
@@ -627,16 +770,6 @@ defmodule Immo.Catalog do
   and the redirects row commit atomically.
 
   Returns `{:ok, redirect}` or `{:error, changeset}`.
-
-  ## Example
-
-      Repo.transact(fn ->
-        with {:ok, updated} <-
-               Catalog.update_project(project, %{slug: "new-slug"}, actor_role: :admin),
-             {:ok, _red} <- Catalog.record_slug_redirect(project, "old-slug", "new-slug") do
-          {:ok, updated}
-        end
-      end)
   """
   def record_slug_redirect(entity, old_slug, new_slug, opts \\ [])
       when is_binary(old_slug) and is_binary(new_slug) do
@@ -654,22 +787,7 @@ defmodule Immo.Catalog do
     |> Repo.insert()
   end
 
-  # Best-effort path resolution. P1-E5.2's `Immo.Edge.Paths` is the
-  # single path authority; until that lands we use the slug as the
-  # path. The §3.8 / §3.9 phasing means this function is replaced in
-  # P1-E5.2 — every callsite already goes through
-  # `record_slug_redirect/4` so the change is local.
   defp old_slug_to_path(_entity, slug), do: "/" <> slug
-
-  ## Audit hook (P1-E2.4 stub)
-
-  # For P1-E2.2 we accept the audit opts but don't write to
-  # audit_log yet — that's P1-E2.4. The wrapper is in place so the
-  # admin UI in P1-E3 can pass `actor_user: user` and have the writes
-  # light up automatically when P1-E2.4 lands.
-  defp maybe_audit(result, _opts, _action, _entity_type) do
-    result
-  end
 
   ## Helpers
 
