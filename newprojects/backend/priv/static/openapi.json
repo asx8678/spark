@@ -1,0 +1,9 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Immo API",
+    "version": "0.0.0",
+    "description": "Placeholder OpenAPI spec — generated and committed in P1-E5."
+  },
+  "paths": {}
+}

@@ -1,0 +1,21 @@
+{
+  "name": "immo-frontend",
+  "main": "./dist/_worker.js/index.js",
+  "compatibility_date": "2026-05-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/projects/*",
+      "/listings/*",
+      "/developers/*",
+      "/fr/*",
+      "/ar/*",
+      "/en/*",
+      "/__health"
+    ]
+  },
+  "kv_namespaces": [
+    { "binding": "FRESHNESS", "id": "<namespace-id>" }
+  ]
+}

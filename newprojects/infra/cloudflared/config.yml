@@ -1,0 +1,7 @@
+# Placeholder — tunnel credentials added in P0-E3
+tunnel: <tunnel-id>
+credentials-file: /etc/cloudflared/credentials.json
+ingress:
+  - hostname: api.example.com
+    service: http://phoenix:4000
+  - service: http_status:404

@@ -1,0 +1,10 @@
+# Placeholder — full stack wired in P0-E3
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: immo
+      POSTGRES_PASSWORD: immo
+      POSTGRES_DB: immo_dev
+    ports:
+      - "5432:5432"
