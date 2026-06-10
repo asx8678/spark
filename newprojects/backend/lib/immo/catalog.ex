@@ -878,15 +878,21 @@ defmodule Immo.Catalog do
   end
 
   @doc """
-  List published property types (PropertyType has no
-  billing gate by design — all published property types
-  are exposed in the search island's filter sidebar).
+  List all property types.
+
+  `PropertyType` has no `published_at` field — once a row is
+  created it is considered "published" (the public URL
+  namespace is taken from `key` / `url_segment`). The §6.3
+  spec calls for adding a per-type visibility gate in a
+  later phase; for now every row is exposed to the search
+  island's filter sidebar. The list is shaped (cursor +
+  limit) by `apply_list_filters_no_publish/2` so the API
+  contract still composes with the same pagination
+  machinery as the other build-tier endpoints.
   """
   @spec list_published_property_types(keyword()) :: [PropertyType.t()]
   def list_published_property_types(opts \\ []) do
     PropertyType
-    |> where([pt], not is_nil(pt.published_at))
-    |> where([pt], pt.published_at <= ^DateTime.utc_now(:second))
     |> apply_list_filters_no_publish(opts)
     |> Repo.all()
   end

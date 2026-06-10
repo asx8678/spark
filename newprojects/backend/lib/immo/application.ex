@@ -12,6 +12,11 @@ defmodule Immo.Application do
       Immo.Repo,
       {DNSCluster, query: Application.get_env(:immo, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Immo.PubSub},
+      # §10.1 path 3 — rate limiter for the public pipeline.
+      # ETS-backed; single-VPS scope (R6). clean_period: 10 min
+      # is fine because every public bucket is at most 1 minute
+      # wide; the cleaner just trims expired keys.
+      Immo.RateLimiter,
       # Start a worker by calling: Immo.Worker.start_link(arg)
       # {Immo.Worker, arg},
       # Start to serve requests, typically the last entry

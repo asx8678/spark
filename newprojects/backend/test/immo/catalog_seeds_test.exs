@@ -18,15 +18,20 @@ defmodule Immo.CatalogSeedsTest do
   end
 
   test "exposes run/0, seeded?/0, reset!/0" do
+    # `Code.ensure_loaded!` forces the load in async contexts;
+    # `function_exported?` alone is racy against the module's
+    # first-call lazy load.
+    Code.ensure_loaded!(Immo.CatalogSeeds)
     funcs = Immo.CatalogSeeds.__info__(:functions) |> Enum.map(&elem(&1, 0))
     assert :run in funcs
     assert :seeded? in funcs
     assert :reset! in funcs
   end
 
-  test "run/0 returns a map" do
-    # Just verify the function exists and is callable. The actual
-    # seed execution is tested via the dev seeds.exs path.
+  test "run/0 exists" do
+    # Same race fix as above; the structural check is the
+    # important bit (the function lives in the module).
+    Code.ensure_loaded!(Immo.CatalogSeeds)
     assert function_exported?(Immo.CatalogSeeds, :run, 0)
   end
 end

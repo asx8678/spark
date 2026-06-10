@@ -49,3 +49,18 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# §10.1 path 3 — public-tier defaults for tests. The allowlist
+# lets a representative dev origin pass; tests that exercise the
+# rejection path use a different `origin` header value. The rate
+# limits are kept small so a per-test "exceed the bucket" loop
+# completes in milliseconds.
+config :immo, :public_allowed_origins, [
+  "http://localhost:4321",
+  "http://127.0.0.1:4321"
+]
+
+config :immo, :public_rate_limits,
+  search: {3, 60_000},
+  geo: {3, 60_000},
+  inquiries: {2, 60_000}

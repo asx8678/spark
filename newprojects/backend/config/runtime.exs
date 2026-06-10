@@ -27,8 +27,27 @@ config :immo, ImmoWeb.Endpoint, http: [port: String.to_integer(System.get_env("P
 # is inert: any past-published_at row is "published" — even if the
 # owning developer's subscription is past_due / canceled / absent.
 # The flag flips on the first paying developer per the plan's
-# "single billable tenant" launch posture (§11).
-config :immo, :billing_enforced, false
+# launcher runbook. Only honored in :prod — dev.exs sets it to
+# `true` for matrix tests, and test.exs to `false`.
+if config_env() == :prod do
+  config :immo, :billing_enforced, false
+end
+
+# §10.1 path 3 — exact-origin allowlist for browser islands.
+# Comma-separated env var; empty by default. Only applied in
+# prod — dev/test set their own allowlist via config/dev.exs
+# and config/test.exs respectively, and runtime.exs would
+# otherwise clobber those test-friendly defaults (the CORS
+# release-gate tests in P1-E5.4 depend on the test allowlist
+# actually being in effect).
+if config_env() == :prod do
+  config :immo,
+         :public_allowed_origins,
+         System.get_env("PUBLIC_ALLOWED_ORIGINS", "")
+         |> String.split(",", trim: true)
+         |> Enum.map(&String.trim/1)
+         |> Enum.reject(&(&1 == ""))
+end
 
 if config_env() == :prod do
   database_url =

@@ -400,13 +400,15 @@ defmodule Immo.ContextsTest do
     end
   end
 
-  describe "Immo.Edge.Paths — placeholder for P1-E5.2" do
-    test "path_for/1 with a slug returns '/{slug}' (P1-E2.5 placeholder)" do
-      assert Paths.path_for(%{slug: "demo"}) == "/demo"
+  describe "Immo.Edge.Paths (P1-E5.2 single path authority)" do
+    test "path_for/2 is the dispatching entry point (no /1 exists)" do
+      refute function_exported?(Paths, :path_for, 1),
+             "Immo.Edge.Paths.path_for must take a locale (path_for/2). " <>
+               "The §6.3 contract is per-locale paths; the locale is not optional."
     end
 
-    test "path_for/1 with no slug returns '/'" do
-      assert Paths.path_for(%{}) == "/"
+    test "path_for/2 on an unknown record returns '/' (stable fallback, not a crash)" do
+      assert Paths.path_for(%{}, :fr) == "/"
     end
   end
 

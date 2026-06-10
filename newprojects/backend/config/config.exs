@@ -7,9 +7,35 @@
 # General application configuration
 import Config
 
+# §10.1 path 3 — public-tier rate limits (Hammer buckets). The
+# defaults are the spec values; tests can override per-bucket
+# at runtime. Each entry is `{max_hits, scale_ms}`.
+#
+# Buckets are referenced by name from `ImmoWeb.Plugs.RateLimit`
+# callers — `search`, `geo`, `inquiries` per the §10.1 row.
+config :immo, :public_rate_limits,
+  search: {60, 60_000},
+  geo: {120, 60_000},
+  inquiries: {5, 60_000}
+
+# §10.1 path 3 — CORS exact-origin allowlist. Site origins only;
+# no wildcards. Overridden in `config/runtime.exs` from
+# `PUBLIC_ALLOWED_ORIGINS` (comma-separated). The dev/test env
+# gets a local-friendly default so the §6.3 release-gate checks
+# (preflight passes for an allowlisted origin, gets no
+# `access-control-allow-*` headers for any other origin) can
+# run without a runtime env.
+config :immo, :public_allowed_origins, []
+
+# Public-tier cache-control defaults (per route, opt-in from
+# the controller via `put_resp_header/2` later). These are the
+# §6.3 conventions wired in the plug.
+config :immo, :public_cache_control,
+  search: "private, no-store",
+  geo: "public, s-maxage=60, stale-while-revalidate=600"
+
 config :immo, :scopes,
   user: [
-    default: true,
     module: Immo.Accounts.Scope,
     assign_key: :current_scope,
     access_path: [:user, :id],

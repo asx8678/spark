@@ -3,6 +3,8 @@ defmodule ImmoWeb.Router do
 
   import ImmoWeb.UserAuth
 
+  alias Immo.Accounts.Scope
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
@@ -34,9 +36,32 @@ defmodule ImmoWeb.Router do
     plug ImmoWeb.Plugs.BearerAuth, :render
   end
 
+  # Per-bucket rate-limit pipelines (P1-E5.4). Each bucket
+  # gets its own pipeline so the `bucket:` option flows
+  # cleanly into `RateLimit.init/1`. Nested `scope` blocks
+  # below compose these on top of `:api_public` (CORS +
+  # CacheControl).
+  pipeline :rate_limit_search do
+    plug ImmoWeb.Plugs.RateLimit, bucket: :search
+  end
+
+  pipeline :rate_limit_geo do
+    plug ImmoWeb.Plugs.RateLimit, bucket: :geo
+  end
+
+  pipeline :rate_limit_inquiries do
+    plug ImmoWeb.Plugs.RateLimit, bucket: :inquiries
+  end
+
   pipeline :api_public do
     plug :accepts, ["json"]
-    # CORS + Hammer rate-limit plug live in P1-E5.4.
+    # CORS with exact-origin allowlist (§10.1 path 3, §13).
+    # No wildcard anywhere; the plug raises at startup if
+    # `public_allowed_origins` contains `*` (defence-in-depth).
+    plug ImmoWeb.Plugs.Cors
+    # Default cache-control per the §6.3 row; controllers
+    # may override by calling `put_resp_header` themselves.
+    plug ImmoWeb.Plugs.CacheControl
   end
 
   # §6.2 admin: every route under /admin requires the user to be
@@ -122,12 +147,11 @@ defmodule ImmoWeb.Router do
 
     # Per-surface stub routes. P1-E1.3 mounts `ImmoWeb.SurfaceLive` at
     # a single path with a `:surface` URL param so the same LiveView
-    # can render whichever surface the live_session is gated for.
     # The on_mount hook is the surface-specific gate. The URL
     # surface segment is also projected into the LiveView session so
     # handle_params/3 (Phoenix LiveView 1.1 does not surface
     # path_params to handle_params) can read it.
-    for surface <- Immo.Accounts.Scope.surfaces() do
+    for surface <- Scope.surfaces() do
       live_session :"admin_#{surface}",
         on_mount: [{ImmoWeb.UserAuth, {:require_surface, surface}}],
         session: %{"surface" => Atom.to_string(surface)} do
@@ -169,8 +193,53 @@ defmodule ImmoWeb.Router do
     get "/internal/freshness", RenderController, :freshness
   end
 
+  # Public tier — anonymous, CORS-allowlisted + rate-limited
+  # (§10.1 path 3, §13). Endpoints themselves (search, geo,
+  # POST inquiries) land in P5-E1 and P1-E6.1; the smoke
+  # routes here exercise the pipeline surface so the §6.3
+  # release-gate tests (CORS preflight, 429 on bucket
+  # exhaustion, Cache-Control headers) run end-to-end.
   scope "/api/v1", ImmoWeb.Api, as: :api_v1 do
     pipe_through :api_public
+
+    # Per-route RateLimit mount: each public endpoint gets its
+    # own bucket (§10.1 path 3: search 60/min/IP, geo
+    # 120/min/IP, inquiries 5/min/IP). Phoenix 1.8 inherits
+    # `pipe_through` from the enclosing scope, so each inner
+    # `pipe_through` is a *delta* — repeating `:api_public`
+    # here would fail with a "duplicate pipe_through" error.
+    # Each inner list therefore names only the bucket-specific
+    # RateLimit; the CORS + CacheControl from the outer scope
+    # flows in automatically.
+    #
+    # The OPTIONS verb is mounted on each public path so the
+    # CORS preflight reaches the `:api_public` pipeline and
+    # Corsica can short-circuit it with the §10.1 allowlist
+    # headers. Without the OPTIONS route, Phoenix returns 404
+    # before the pipeline runs and the preflight is rejected
+    # by the browser.
+    scope "/__smoke/public/search" do
+      pipe_through [:rate_limit_search]
+      options "/", PublicController, :search
+      get "/", PublicController, :search
+    end
+
+    scope "/__smoke/public/geo" do
+      pipe_through [:rate_limit_geo]
+      options "/", PublicController, :geo
+      get "/", PublicController, :geo
+    end
+
+    scope "/__smoke/public/inquiries" do
+      pipe_through [:rate_limit_inquiries]
+      options "/", PublicController, :inquiries
+      post "/", PublicController, :inquiries
+    end
+
+    # §6.4 legacy — keep the existing __smoke/public path
+    # reachable for callers that pinned it before the
+    # per-route buckets landed. Only `:api_public`; no rate
+    # limit on the legacy surface.
     get "/__smoke/public", IndexController, :index
   end
 end

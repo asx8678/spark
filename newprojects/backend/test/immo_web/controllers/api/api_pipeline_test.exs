@@ -87,9 +87,6 @@ defmodule ImmoWeb.ApiPipelineTest do
     end
   end
 
-  ## Helpers
-
-  defp auth_header(token), do: [{"authorization", "Bearer #{token}"}]
 
   defp problem_json?(conn) do
     case get_resp_header(conn, "content-type") do

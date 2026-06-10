@@ -96,3 +96,13 @@ config :phoenix_live_view,
 config :immo, :billing_enforced, true
 
 config :swoosh, :api_client, false
+
+# §10.1 path 3 — dev-friendly CORS allowlist. Production overrides
+# this from `PUBLIC_ALLOWED_ORIGINS`. The dev frontend runs on
+# `localhost:4321` (Astro default) so its origin is allowlisted.
+config :immo, :public_allowed_origins, [
+  "http://localhost:4321",
+  "http://127.0.0.1:4321",
+  "http://localhost:4000",
+  "http://127.0.0.1:4000"
+]

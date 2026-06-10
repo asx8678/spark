@@ -34,14 +34,24 @@ defmodule ImmoWeb.Plugs.BearerAuthTest do
   describe "§6.4 / AC: valid bearer token authenticates" do
     test "build scope with valid token → assigns :api_scope = :build" do
       System.put_env("BUILD_TOKEN", @build_token)
-      conn = build_conn() |> put_req_header("authorization", "Bearer #{@build_token}") |> run_plug(:build)
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{@build_token}")
+        |> run_plug(:build)
+
       assert conn.assigns.api_scope == :build
       refute conn.halted
     end
 
     test "render scope with valid token → assigns :api_scope = :render" do
       System.put_env("RENDER_TOKEN", @render_token)
-      conn = build_conn() |> put_req_header("authorization", "Bearer #{@render_token}") |> run_plug(:render)
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{@render_token}")
+        |> run_plug(:render)
+
       assert conn.assigns.api_scope == :render
       refute conn.halted
     end
@@ -62,7 +72,10 @@ defmodule ImmoWeb.Plugs.BearerAuthTest do
 
     test "wrong scheme (Basic, etc.) → 401" do
       System.put_env("BUILD_TOKEN", @build_token)
-      conn = build_conn() |> put_req_header("authorization", "Basic dXNlcjpwYXNz") |> run_plug(:build)
+
+      conn =
+        build_conn() |> put_req_header("authorization", "Basic dXNlcjpwYXNz") |> run_plug(:build)
+
       assert conn.status == 401
       assert conn.halted
       assert problem_json?(conn)
@@ -70,7 +83,10 @@ defmodule ImmoWeb.Plugs.BearerAuthTest do
 
     test "wrong token → 401" do
       System.put_env("BUILD_TOKEN", @build_token)
-      conn = build_conn() |> put_req_header("authorization", "Bearer wrong-token") |> run_plug(:build)
+
+      conn =
+        build_conn() |> put_req_header("authorization", "Bearer wrong-token") |> run_plug(:build)
+
       assert conn.status == 401
       assert conn.halted
       assert problem_json?(conn)
@@ -94,28 +110,42 @@ defmodule ImmoWeb.Plugs.BearerAuthTest do
   describe "§6.4 / AC: empty / unset expected token never authenticates" do
     test "BUILD_TOKEN unset → 401" do
       System.delete_env("BUILD_TOKEN")
-      conn = build_conn() |> put_req_header("authorization", "Bearer anything") |> run_plug(:build)
+
+      conn =
+        build_conn() |> put_req_header("authorization", "Bearer anything") |> run_plug(:build)
+
       assert conn.status == 401
       assert conn.halted
     end
 
     test "BUILD_TOKEN empty string → 401" do
       System.put_env("BUILD_TOKEN", "")
-      conn = build_conn() |> put_req_header("authorization", "Bearer anything") |> run_plug(:build)
+
+      conn =
+        build_conn() |> put_req_header("authorization", "Bearer anything") |> run_plug(:build)
+
       assert conn.status == 401
       assert conn.halted
     end
 
     test "BUILD_TOKEN with only commas (no real values) → 401" do
       System.put_env("BUILD_TOKEN", ",,,")
-      conn = build_conn() |> put_req_header("authorization", "Bearer anything") |> run_plug(:build)
+
+      conn =
+        build_conn() |> put_req_header("authorization", "Bearer anything") |> run_plug(:build)
+
       assert conn.status == 401
       assert conn.halted
     end
 
     test "RENDER_TOKEN unset → 401 even with a BUILD-style token" do
       System.delete_env("RENDER_TOKEN")
-      conn = build_conn() |> put_req_header("authorization", "Bearer #{@build_token}") |> run_plug(:render)
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{@build_token}")
+        |> run_plug(:render)
+
       assert conn.status == 401
       assert conn.halted
     end
@@ -164,7 +194,9 @@ defmodule ImmoWeb.Plugs.BearerAuthTest do
       token = "test-build-token-0000000000000000000000000000"
       System.put_env("BUILD_TOKEN", " #{token} , , #{token} ")
 
-      conn = build_conn() |> put_req_header("authorization", "Bearer #{token}") |> run_plug(:build)
+      conn =
+        build_conn() |> put_req_header("authorization", "Bearer #{token}") |> run_plug(:build)
+
       assert conn.assigns.api_scope == :build
     end
   end
@@ -173,7 +205,12 @@ defmodule ImmoWeb.Plugs.BearerAuthTest do
     test "render token on a build endpoint → 401" do
       System.put_env("BUILD_TOKEN", @build_token)
       System.put_env("RENDER_TOKEN", @render_token)
-      conn = build_conn() |> put_req_header("authorization", "Bearer #{@render_token}") |> run_plug(:build)
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{@render_token}")
+        |> run_plug(:build)
+
       assert conn.status == 401
       assert conn.halted
     end
@@ -181,7 +218,12 @@ defmodule ImmoWeb.Plugs.BearerAuthTest do
     test "build token on a render endpoint → 401" do
       System.put_env("BUILD_TOKEN", @build_token)
       System.put_env("RENDER_TOKEN", @render_token)
-      conn = build_conn() |> put_req_header("authorization", "Bearer #{@build_token}") |> run_plug(:render)
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{@build_token}")
+        |> run_plug(:render)
+
       assert conn.status == 401
       assert conn.halted
     end
@@ -189,7 +231,12 @@ defmodule ImmoWeb.Plugs.BearerAuthTest do
     test "valid build token does not authenticate on render scope even if both envs are set" do
       System.put_env("BUILD_TOKEN", @build_token)
       System.put_env("RENDER_TOKEN", @render_token)
-      conn = build_conn() |> put_req_header("authorization", "Bearer #{@build_token}") |> run_plug(:render)
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{@build_token}")
+        |> run_plug(:render)
+
       assert conn.status == 401
     end
   end

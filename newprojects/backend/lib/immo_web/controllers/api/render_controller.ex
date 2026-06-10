@@ -54,12 +54,25 @@ defmodule ImmoWeb.Api.RenderController do
 
   use ImmoWeb.Api, :controller
 
+  # §6.3 / P1-E5.5 — every render-tier action advertises an
+  # `open_api_spex` operation. The full spec (descriptions,
+  # security, parameters, responses) is in `ImmoWeb.ApiSpec`
+  # — the per-action annotations here exist so open_api_spex's
+  # introspection finds the action with the same operationId
+  # the spec references. If you add or rename an action,
+  # also update `ImmoWeb.ApiSpec.paths_map/0`.
+  use OpenApiSpex.ControllerSpecs
+
   alias Immo.Catalog
   alias Immo.Catalog.{Developer, Listing, Project, PropertyType}
   alias Immo.Edge
   alias Immo.Media
 
   import Ecto.Query, only: [where: 3]
+  operation(:project, summary: "Single published project (render tier)")
+  operation(:listing, summary: "Single published listing (render tier)")
+  operation(:developer, summary: "Single published developer (render tier)")
+  operation(:freshness, summary: "Freshness check for a public path (render tier)")
 
   @doc """
   `GET /api/v1/projects/:slug` — single published project record.

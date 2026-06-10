@@ -53,9 +53,10 @@ defmodule Immo.MixProject do
        compile: false,
        depth: 1},
       {:swoosh, "~> 1.16"},
-      {:req, "~> 0.5"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
+      {:hammer, "~> 7.4"},
+      {:corsica, "~> 2.1"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
@@ -63,10 +64,15 @@ defmodule Immo.MixProject do
       {:argon2_elixir, "~> 4.0"},
       {:comeonin, "~> 5.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      # §6.3 / P1-E5.5 — OpenAPI 3 source-of-truth for the /api/v1
+      # read API. The spec is generated from operation specs on
+      # every controller and committed at priv/static/openapi.json;
+      # uncommitted diffs fail CI (the §16 release-gate "spec
+      # drift fails the build").
+      {:open_api_spex, "~> 3.22"}
     ]
   end
-
   defp dialyzer do
     [
       plt_add_apps: [:ex_unit, :mix],
