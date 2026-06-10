@@ -36,7 +36,7 @@ defmodule Immo.Catalog.Developer do
     field :contact, :map
     field :seo, :map
     field :published_at, :utc_datetime
-    belongs_to :logo_media, Immo.Catalog.Media
+    belongs_to :logo_media, Immo.Media.Media
 
     timestamps(type: :utc_datetime)
   end
