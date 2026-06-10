@@ -14,7 +14,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prebuild": "node scripts/ensure-wrangler-main.mjs",
+    "check:types-drift": "node scripts/check-types-drift.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^13.7.0",
@@ -22,13 +24,15 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.6",
+    "@types/node": "^25.9.2",
     "eslint": "^9.39.2",
     "eslint-plugin-astro": "^1.5.0",
+    "openapi-typescript": "^7.10.1",
     "prettier": "^3.7.4",
     "prettier-plugin-astro": "^0.14.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.50.0",
     "vitest": "^4.0.16",
-    "wrangler": "^4.56.0"
+    "wrangler": "^4.99.0"
   }
 }

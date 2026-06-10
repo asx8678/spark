@@ -1,1 +1,37 @@
-# Placeholder — filled in P0-E1.2
+name: Frontend build (D3 fallback)
+
+# Decision D3 fallback: astro build && wrangler deploy via workflow_dispatch.
+# Default path is Cloudflare Workers Builds (P0-E2).
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment target
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: newprojects/frontend
+    env:
+      RENDER_MODE: static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: newprojects/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Wrangler deploy (stub)
+        run: |
+          echo "TODO P0-E2+: wrangler deploy with CLOUDFLARE_API_TOKEN secret"
+          echo "Skipping deploy in placeholder workflow."

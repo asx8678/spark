@@ -1,1 +1,125 @@
-# Placeholder — filled in P0-E1.2
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend gates
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: newprojects/backend
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            newprojects/backend/deps
+            newprojects/backend/_build
+          key: backend-${{ runner.os }}-${{ hashFiles('newprojects/backend/mix.lock') }}
+      - uses: actions/cache@v4
+        with:
+          path: newprojects/backend/priv/plts
+          key: dialyzer-${{ runner.os }}-${{ hashFiles('newprojects/backend/mix.lock') }}
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix credo --strict
+      - run: mix dialyzer
+      - run: mix test
+      - run: mix openapi.drift
+
+  frontend:
+    name: Frontend gates
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: newprojects/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: newprojects/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run check:types-drift
+
+  frontend-build-static:
+    name: Build smoke (RENDER_MODE=static)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: newprojects/frontend
+    env:
+      RENDER_MODE: static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: newprojects/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  frontend-build-dynamic:
+    name: Build smoke (RENDER_MODE=dynamic)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: newprojects/frontend
+    env:
+      RENDER_MODE: dynamic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: newprojects/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  lighthouse-preview:
+    name: Lighthouse CI (preview stub)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lighthouse CI stub
+        run: |
+          echo "Lighthouse CI on Cloudflare preview deployments is wired in P0-E2 (Git builds)."
+          echo "Budgets (plan section 15.5): LCP < 2.5s, CLS < 0.1, INP < 200ms,"
+          echo "  detail pages <= 100KB JS gzip, landing pages <= 60KB JS gzip."
+          echo "See newprojects/frontend/lighthouserc.json for configuration stub."

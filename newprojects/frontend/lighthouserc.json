@@ -1,0 +1,17 @@
+{
+  "ci": {
+    "collect": {
+      "staticDistDir": "./dist/client",
+      "numberOfRuns": 1
+    },
+    "assert": {
+      "assertions": {
+        "categories:performance": ["warn", { "minScore": 0.9 }],
+        "largest-contentful-paint": ["warn", { "maxNumericValue": 2500 }],
+        "cumulative-layout-shift": ["warn", { "maxNumericValue": 0.1 }],
+        "interactive": ["warn", { "maxNumericValue": 200 }]
+      }
+    }
+  },
+  "_note": "Activated against Cloudflare preview URLs in P0-E2. Budgets per plan section 15.5."
+}

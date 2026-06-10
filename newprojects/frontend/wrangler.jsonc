@@ -1,6 +1,6 @@
 {
+  // main: ./dist/_worker.js/index.js — omitted at build time (Astro adapter injects); custom entry in P4-E3
   "name": "immo-frontend",
-  "main": "./dist/_worker.js/index.js",
   "compatibility_date": "2026-05-01",
   "assets": {
     "directory": "./dist",

@@ -1,1 +1,26 @@
-# Placeholder — filled in P0-E1.2
+name: Backend deploy
+
+# Placeholder — activated when P0-E3 Coolify webhook is available (plan section 12.3).
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment target
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release image (stub)
+        run: |
+          echo "TODO P0-E3+: docker build backend release image"
+          echo "TODO: POST Coolify webhook URL from secrets (COOLIFY_DEPLOY_WEBHOOK)"
+      - name: Skip deploy
+        run: echo "Backend deploy placeholder — no Coolify target yet."
