@@ -16,6 +16,29 @@
     ]
   },
   "kv_namespaces": [
-    { "binding": "FRESHNESS", "id": "<namespace-id>" }
-  ]
+    { "binding": "FRESHNESS", "id": "<staging-kv-namespace-id>" }
+  ],
+  "vars": {
+    "PUBLIC_ENVIRONMENT": "development"
+  },
+  "env": {
+    "staging": {
+      "name": "immo-frontend-staging",
+      "vars": {
+        "PUBLIC_ENVIRONMENT": "staging"
+      },
+      "kv_namespaces": [
+        { "binding": "FRESHNESS", "id": "<staging-kv-namespace-id>" }
+      ]
+    },
+    "production": {
+      "name": "immo-frontend-production",
+      "vars": {
+        "PUBLIC_ENVIRONMENT": "production"
+      },
+      "kv_namespaces": [
+        { "binding": "FRESHNESS", "id": "<production-kv-namespace-id>" }
+      ]
+    }
+  }
 }

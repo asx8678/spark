@@ -31,7 +31,12 @@ jobs:
           cache-dependency-path: newprojects/frontend/package-lock.json
       - run: npm ci
       - run: npm run build
-      - name: Wrangler deploy (stub)
+      - name: Wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          echo "TODO P0-E2+: wrangler deploy with CLOUDFLARE_API_TOKEN secret"
-          echo "Skipping deploy in placeholder workflow."
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "CLOUDFLARE_API_TOKEN not set — skipping deploy (wire secret in P0-E2)."
+            exit 0
+          fi
+          npx wrangler deploy --env "${{ inputs.environment }}"

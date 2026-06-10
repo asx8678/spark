@@ -1,5 +1,6 @@
 ---
-
+const environment = import.meta.env.PUBLIC_ENVIRONMENT ?? 'development';
+const gitSha = import.meta.env.PUBLIC_GIT_SHA ?? 'local';
 ---
 
 <html lang="en">
@@ -9,9 +10,19 @@
     <link rel="icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width" />
     <meta name="generator" content={Astro.generator} />
-    <title>Astro</title>
+    <title>Immo Platform</title>
   </head>
   <body>
-    <h1>Astro</h1>
+    <main>
+      <h1>Immo Platform — hello-world</h1>
+      <p>P0-E2.1 staging Worker verification page. Replace with the real site in P2.</p>
+      <dl>
+        <dt>environment</dt>
+        <dd>{environment}</dd>
+        <dt>git_sha</dt>
+        <dd>{gitSha}</dd>
+      </dl>
+      <p><a href="/__health">/__health</a></p>
+    </main>
   </body>
 </html>

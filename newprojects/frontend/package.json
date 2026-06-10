@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.6",
+    "@cloudflare/workers-types": "^4.20260610.1",
     "@types/node": "^25.9.2",
     "eslint": "^9.39.2",
     "eslint-plugin-astro": "^1.5.0",
