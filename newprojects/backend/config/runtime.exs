@@ -22,6 +22,14 @@ end
 
 config :immo, ImmoWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# §5.13 / D13 — BILLING_ENFORCED gates the §5.13 publish predicate.
+# When false (default; the launch posture per D13), the publish gate
+# is inert: any past-published_at row is "published" — even if the
+# owning developer's subscription is past_due / canceled / absent.
+# The flag flips on the first paying developer per the plan's
+# "single billable tenant" launch posture (§11).
+config :immo, :billing_enforced, false
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

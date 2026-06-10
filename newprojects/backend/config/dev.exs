@@ -89,4 +89,10 @@ config :phoenix_live_view,
   enable_expensive_runtime_checks: true
 
 # Disable swoosh api client as it is only required for production adapters.
+# §5.13 / D13 — flip the billing gate on in dev for the §15.1 matrix
+# tests; default is off (D13 launch posture). Tests that need the
+# other branch set the runtime config via Application.put_env before
+# calling the predicate.
+config :immo, :billing_enforced, true
+
 config :swoosh, :api_client, false

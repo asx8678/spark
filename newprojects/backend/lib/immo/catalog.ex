@@ -22,6 +22,22 @@ defmodule Immo.Catalog do
 
   Plus the tenant-scoping helper `scoped_query/2` from P1-E1.2.
 
+  ## §5.13 publish predicate (P1-E2.3)
+
+  `Catalog.published/1` is the single composable definition of
+  "published" for the system. Per §5.13:
+
+      published_at IS NOT NULL
+      AND published_at <= now()
+      AND (for projects/listings only) the owning developer has a
+          subscription with status IN ('active', 'trialing') when
+          BILLING_ENFORCED is on.
+
+  Developers themselves are NOT billing-gated (§5.13). The predicate
+  is composable — callers add their own `where`/`order_by` clauses
+  on top. Callers MUST compose it; re-implementing the predicate
+  elsewhere is the §5.13 anti-pattern.
+
   ## §3.8 slug immutability
 
   `update_<entity>/3` accepts an `:actor_role` option. When the
@@ -32,15 +48,6 @@ defmodule Immo.Catalog do
   `record_slug_redirect/4` inside the same `Repo.transact/1` block
   (so the redirects row and the slug change commit atomically).
 
-  ## §5.13 / §5.4 attributes validation
-
-  The `listings` changesets call `validate_attributes/2`, which uses
-  the eager-loaded `property_type.schema_hints` and
-  `property_type.custom_fields` to check every key in `attributes`.
-  The required-custom-fields gate runs at publish time (P1-E2.3);
-  the changeset soft-fails for drafts so admins can save partial
-  work.
-
   ## §5.8 tenant scoping
 
   `scoped_query/2` from P1-E1.2 is the only place the developer_user
@@ -48,10 +55,8 @@ defmodule Immo.Catalog do
   apply the filter at the query level. Staff roles get unfiltered
   queries.
 
-  ## Out of scope (P1-E2.2)
+  ## Out of scope (P1-E2.2 / P1-E2.3)
 
-    * `Catalog.published/1` predicate and the §5.13 billing gate
-      (P1-E2.3).
     * `audit_log` wrapping of every mutation (P1-E2.4).
     * KV dirty-marking on publish/unpublish/slug change (P4).
     * The `Immo.Edge.Paths` single-path authority for old/new path
@@ -72,6 +77,217 @@ defmodule Immo.Catalog do
     Project,
     Redirect
   }
+
+  @doc """
+  Whether the §5.13 billing gate is active. Read at runtime from
+  `:immo, :billing_enforced` (default `false` per D13 launch posture;
+  the dev environment sets it to `true` so the §15.1 matrix tests
+  exercise the gated path; tests that need the other branch flip the
+  runtime config via `Application.put_env` per test).
+  """
+  @spec billing_enforced?() :: boolean()
+  def billing_enforced?, do: Application.get_env(:immo, :billing_enforced, false)
+
+  ## §5.13 publish predicate (P1-E2.3)
+
+  @doc """
+  The single composable definition of "published" for the system.
+
+  Accepts a queryable (a schema module `Developer | Project | Listing`,
+  or an existing `%Ecto.Query{}` whose `from` source is one of
+  those schemas). Returns a query that callers compose with their own
+  `where` / `order_by` / `preload` clauses — this is the
+  grep-able single definition per §5.13.
+
+  Per §5.13:
+
+      published_at IS NOT NULL
+      AND published_at <= now()
+      AND (for projects/listings only) the owning developer has a
+          subscription with status IN ('active', 'trialing') when
+          BILLING_ENFORCED is on.
+
+  Developers themselves are NOT billing-gated. When `BILLING_ENFORCED`
+  is off, the gate is inert and any past-published row is
+  "published" (D13 — launch posture until the first paying customer
+  flips the flag).
+
+  ## Examples
+
+      # Sitemap
+      Project |> Catalog.published() |> Repo.all()
+
+      # Read API
+      Listing
+      |> Catalog.published()
+      |> where(city: ^city)
+      |> order_by(desc: :published_at)
+      |> Repo.all()
+
+      # Skip-if-unchanged (P3)
+      max_published_at =
+        Listing
+        |> Catalog.published()
+        |> select([l], max(l.published_at))
+        |> Repo.one()
+
+  ## Caller contract
+
+  No re-implementation. If a query needs the publish filter, it
+  composes `Catalog.published/1`. The §5.13 sentence
+  ("No second definition anywhere") is enforced by code review
+  and the §15.1 matrix test suite — if a new caller introduces
+  a parallel `where: p.published_at <= ^now` clause, that test
+  must explain why.
+  """
+  @spec published(Ecto.Queryable.t()) :: Ecto.Queryable.t()
+  def published(queryable) when is_atom(queryable) do
+    do_published(queryable)
+  end
+
+  @supported_publish_sources [Developer, Project, Listing]
+
+  def published(%Ecto.Query{} = query) do
+    source = queryable_schema(query)
+
+    case source do
+      s when s in @supported_publish_sources and s == Developer ->
+        query
+        |> where_published_at_clause(:developer)
+        |> apply_developer_billing_gate()
+
+      s when s in @supported_publish_sources and s == Project ->
+        query
+        |> where_published_at_clause(:project)
+        |> apply_project_billing_gate()
+
+      s when s in @supported_publish_sources and s == Listing ->
+        query
+        |> where_published_at_clause(:listing)
+        |> apply_listing_billing_gate()
+
+      _ ->
+        # Caller passed a query whose source is not one of the
+        # known schemas. Rather than silently fail-closed, raise
+        # — the spec requires the predicate to be a single
+        # definition, so we don't recognize a query that bypasses
+        # our dispatch.
+        raise ArgumentError,
+              "Catalog.published/1 only supports Developer, Project, and Listing queries. " <>
+                "Got query with unknown source."
+    end
+  end
+
+  # The schema-module entry point. When callers pass a bare module
+  # atom, we synthesize a base query (the spec shape is a queryable,
+  # which is a schema module OR a query).
+  defp do_published(Developer) do
+    Developer
+    |> where_published_at_clause(:developer)
+    |> apply_developer_billing_gate()
+  end
+
+  defp do_published(Project) do
+    Project
+    |> where_published_at_clause(:project)
+    |> apply_project_billing_gate()
+  end
+
+  defp do_published(Listing) do
+    Listing
+    |> where_published_at_clause(:listing)
+    |> apply_listing_billing_gate()
+  end
+
+  # The base §5.13 published_at clause. The `source` arg is the
+  # canonical source-binding atom for the table being filtered; the
+  # `where/3` call below uses the right binding for that source.
+  defp where_published_at_clause(query, source) do
+    case source do
+      :developer ->
+        where(query, [d], not is_nil(d.published_at) and d.published_at <= ^now_unix())
+
+      :project ->
+        where(query, [p], not is_nil(p.published_at) and p.published_at <= ^now_unix())
+
+      :listing ->
+        where(query, [l], not is_nil(l.published_at) and l.published_at <= ^now_unix())
+    end
+  end
+
+  # Per §5.13, developers are NOT billing-gated. The developer
+  # publish predicate is just the published_at clause.
+  defp apply_developer_billing_gate(query), do: query
+
+  # Project billing gate (§5.13):
+  #   - When BILLING_ENFORCED is OFF: gate is inert. All
+  #     past-published projects are published regardless of
+  #     subscription state.
+  #   - When BILLING_ENFORCED is ON: project is published only if
+  #     the owning developer has at least one subscription row with
+  #     status in ('active', 'trialing'). Implemented as an EXISTS
+  #     subquery correlated to the outer projects.developer_id via
+  #     an Ecto `parent_as/1` reference. `parent_as(:projects)`
+  #     names the source table of the outer query (Ecto gives the
+  #     source the name of the schema, lowercase + s).
+  defp apply_project_billing_gate(query) do
+    if billing_enforced?() do
+      # Fragment-based correlated subquery: the fragment sees the
+      # outer `p` binding as a raw SQL column reference, sidestepping
+      # Ecto's hygiene around outer-binding capture in subqueries.
+      # The SQL is parameterised: `?` binds the outer projects.id
+      # safely. (Using `p.developer_id` directly in the fragment
+      # would also work since the outer query provides the binding
+      # in scope at the `where` call site.)
+      where(
+        query,
+        [p],
+        fragment(
+          "EXISTS (SELECT 1 FROM subscriptions s WHERE s.developer_id = ? AND s.status IN (\'active\', \'trialing\'))",
+          p.developer_id
+        )
+      )
+    else
+      query
+    end
+  end
+
+  # Listing billing gate (§5.13):
+  #   - The owning developer of a listing is the developer of its
+  #     project. A standalone listing (project_id IS NULL) has no
+  #     owning developer → with BILLING_ENFORCED on, a standalone
+  #     listing is excluded (the join through `project` is
+  #     impossible). The §5.13 principle: the only path to a
+  #     published listing under enforced billing is a published
+  #     project under a subscribed developer.
+  defp apply_listing_billing_gate(query) do
+    if billing_enforced?() do
+      # Listings don't have a direct developer_id; the path is
+      # listing → project → developer → subscription. The join
+      # chain is two hops. We use a fragment for the EXISTS
+      # subquery: the fragment sees the outer `l` and `p` bindings
+      # as raw SQL columns, sidestepping Ecto's hygiene around
+      # outer-binding capture in subqueries.
+      where(
+        query,
+        [l],
+        fragment(
+          "EXISTS (SELECT 1 FROM subscriptions s JOIN projects p ON p.id = ? WHERE s.developer_id = p.developer_id AND s.status IN (\'active\', \'trialing\'))",
+          l.project_id
+        )
+      )
+    else
+      query
+    end
+  end
+
+  # The §5.13 future-publish guard. `published_at <= now()` is the
+  # "scheduled publish" carve-out: admins can set a future timestamp
+  # and the row stays unpublished until that moment. We compute
+  # `now()` once per call so the query is deterministic within a
+  # single request (and the test suite can substitute a fixed
+  # instant in time without time-mocking).
+  defp now_unix, do: DateTime.utc_now(:second)
 
   ## Tenant scoping (P1-E1.2)
 

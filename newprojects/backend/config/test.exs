@@ -26,6 +26,11 @@ config :immo, ImmoWeb.Endpoint,
 # In test we don't send emails
 config :immo, Immo.Mailer, adapter: Swoosh.Adapters.Test
 
+# §5.13 / D13 — billing gate default for tests. The matrix tests
+# in P1-E2.3 set this explicitly per-axis; the default below keeps
+# the gate inert for any test that does not opt in.
+config :immo, :billing_enforced, false
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 
