@@ -60,6 +60,8 @@ defmodule Immo.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
+      {:argon2_elixir, "~> 4.0"},
+      {:comeonin, "~> 5.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
@@ -73,7 +75,7 @@ defmodule Immo.MixProject do
     ]
   end
 
-  defp aliases do
+  def aliases do
     [
       setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],

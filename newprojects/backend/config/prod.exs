@@ -19,6 +19,10 @@ config :immo, ImmoWeb.Endpoint,
     ]
   ]
 
+# §10.1 path 5: the staff session cookie is HttpOnly + Secure in prod.
+# dev/test keep `secure: false` so local http works.
+config :immo, :cookie_secure, true
+
 # Configure Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Req
 
