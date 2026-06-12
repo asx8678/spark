@@ -3,23 +3,3 @@
 .dolt/
 *.db
 .beads-credential-key
-
-# OS
-.DS_Store
-
-# Backend (Elixir)
-backend/_build/
-backend/deps/
-backend/priv/plts/
-backend/*.ez
-backend/erl_crash.dump
-
-# Frontend (Node)
-frontend/node_modules/
-frontend/dist/
-frontend/.astro/
-
-# Env / secrets
-.env
-.env.*
-!.env.example
